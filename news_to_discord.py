@@ -61,10 +61,20 @@ NEWS_FEEDS = {
 class NewsAggregator:
     """ニュース収集・要約クラス"""
     
-    def __init__(self):
-        if not OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY環境変数が設定されていません")
+def __init__(self):
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY環境変数が設定されていません")
+    try:
+        # OpenAI SDK v1.0+ 用の初期化
         self.client = OpenAI(api_key=OPENAI_API_KEY)
+    except TypeError:
+        # 古いSDKの場合の対応
+        import openai
+        openai.api_key = OPENAI_API_KEY
+        self.client = None
+        self.use_legacy_api = True
+    else:
+        self.use_legacy_api = False
         
     def fetch_news_from_feed(self, feed_url: str, source_name: str, max_items: int = 5) -> List[Dict]:
         """RSSフィードからニュースを取得"""
@@ -138,12 +148,15 @@ class NewsAggregator:
         print("🤖 OpenAI APIで日本語要約を生成中...")
         
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """あなたは優秀な政治・経済ニュースアナリストです。
+    if self.use_legacy_api:
+        # 古いSDK用
+        import openai
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """あなたは優秀な政治・経済ニュースアナリストです。
 日本語と英語のニュースを分析し、**全て日本語**で以下の形式で要約してください：
 
 【📅 本日のニュース要約】
@@ -174,18 +187,66 @@ class NewsAggregator:
 - 英語のニュースも必ず日本語で要約してください
 - 専門用語は日本語に訳してください
 - 読者が理解しやすい表現を使ってください"""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"以下のニュースを全て日本語で要約してください：\n\n{news_text}"
-                    }
-                ],
-                temperature=0.7,
-                max_tokens=3000
-            )
-            
-            summary = response.choices[0].message.content
-            return summary
+                },
+                {
+                    "role": "user",
+                    "content": f"以下のニュースを全て日本語で要約してください：\n\n{news_text}"
+                }
+            ],
+            temperature=0.7,
+            max_tokens=3000
+        )
+        summary = response['choices'][0]['message']['content']
+    else:
+        # 新しいSDK用
+        response = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """あなたは優秀な政治・経済ニュースアナリストです。
+日本語と英語のニュースを分析し、**全て日本語**で以下の形式で要約してください：
+
+【📅 本日のニュース要約】
+
+**🔥 今日の注目トピック**
+- 最も重要なニュース5-7件を簡潔に（政治・経済・金融市場）
+- 国内外の重要な動きを含める
+
+**📰 国内メディアの報道**
+各メディアごとに主要ニュースを2-3行で要約
+- 日経新聞
+- ロイター通信
+- 東洋経済オンライン
+- PRタイムス
+- 時事ドットコム
+
+**🌍 海外メディアの報道（日本語で要約）**
+英語のニュースも全て日本語で要約してください
+- Bloomberg: 金融市場の動向
+- FXStreet: 為替・金融市場
+- Reuters英語版: 国際情勢
+
+**💡 今日のポイント**
+- 全体を通じた重要なポイント（2-3点）
+- 日本への影響や市場への影響
+
+**重要**: 
+- 英語のニュースも必ず日本語で要約してください
+- 専門用語は日本語に訳してください
+- 読者が理解しやすい表現を使ってください"""
+                },
+                {
+                    "role": "user",
+                    "content": f"以下のニュースを全て日本語で要約してください：\n\n{news_text}"
+                }
+            ],
+            temperature=0.7,
+            max_tokens=3000
+        )
+        summary = response.choices[0].message.content
+    
+    return summary
             
         except Exception as e:
             print(f"❌ OpenAI API エラー: {e}")
