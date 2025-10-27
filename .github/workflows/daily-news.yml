@@ -1,0 +1,34 @@
+name: 毎朝の政治ニュース配信
+
+on:
+  schedule:
+    # 毎日6:30 JST (21:30 UTC前日) に実行
+    - cron: '30 21 * * *'
+  
+  # 手動実行も可能に
+  workflow_dispatch:
+
+jobs:
+  fetch-and-summarize-news:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+    
+    - name: Pythonセットアップ
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: 依存パッケージインストール
+      run: |
+        pip install -r requirements.txt
+    
+    - name: ニュース取得・要約・投稿
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      run: |
+        python news_to_discord.py
