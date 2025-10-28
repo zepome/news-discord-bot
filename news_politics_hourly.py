@@ -77,6 +77,50 @@ def check_political_relevance(title, description):
         print(f"⚠️ Gemini APIエラー: {e}")
         return 0
 
+def create_discord_message(news_item, sentiment_analysis=None):
+    """
+    Discord投稿用のメッセージを作成（改良版）
+    """
+    from datetime import datetime, timezone, timedelta
+    
+    title = news_item.get('title', 'タイトルなし')
+    link = news_item.get('link', '')
+    source = news_item.get('source', '不明')
+    score = news_item.get('score', 0)
+    
+    # スコアに応じた星評価
+    if score >= 90:
+        stars = '⭐⭐⭐⭐⭐'
+    elif score >= 80:
+        stars = '⭐⭐⭐⭐'
+    elif score >= 70:
+        stars = '⭐⭐⭐'
+    elif score >= 60:
+        stars = '⭐⭐'
+    else:
+        stars = '⭐'
+    
+    # 現在時刻（日本時間）
+    jst = timezone(timedelta(hours=9))
+    now = datetime.now(jst)
+    time_str = now.strftime('%H:%M')
+    
+    # メッセージ作成
+    content = f"🏛️ **【政治】{title}**\n"
+    content += f"━━━━━━━━━━━━━━━━━━\n"
+    content += f"📰 **出典**: {source}\n"
+    content += f"🎯 **関連度**: {score}点 {stars}\n"
+    content += f"⏰ **取得時刻**: {time_str}\n"
+    content += f"🔗 [記事を読む](<{link}>)\n"
+    
+    # 世論分析がある場合（将来の拡張用）
+    if sentiment_analysis:
+        content += "\n" + "━━━━━━━━━━━━━━━━━━\n"
+        content += "📊 **世論分析**\n\n"
+        content += sentiment_analysis.get('raw_analysis', '分析結果なし')
+    
+    return {'content': content}
+
 def main():
     print("=" * 60)
     print("🏛️ 政治ニュース自動収集Bot")
@@ -155,13 +199,12 @@ def main():
     
     posted = 0
     for news in political_news[:MAX_NEWS_TO_POST]:
-        content = f"**【政治ニュース】{news['title']}**\n"
-        content += f"📰 出典: {news['source']}\n"
-        content += f"🎯 関連度: {news['score']}点\n"
-        content += f"🔗 {news['link']}"
+        # メッセージ作成（改良版フォーマット）
+        message = create_discord_message(news)
         
         try:
-            requests.post(DISCORD_WEBHOOK_URL, json={'content': content}, timeout=10)
+            requests.post(DISCORD_WEBHOOK_URL, json=message, timeout=10)
+
             posted += 1
             print(f"✅ Discord投稿: {news['title']}")
             time.sleep(2)
