@@ -2,44 +2,96 @@
 # -*- coding: utf-8 -*-
 """
 国内政治ニュース自動監視システム（1時間ごと）
-特定キーワードに完全一致するニュースのみを抽出してDiscordに投稿
+Gemini APIによる高精度フィルタリング
 """
 
 import os
 import sys
 import re
 import requests
+import json
 from datetime import datetime
 from typing import List, Dict, Optional
 import feedparser
 
 # 環境変数から取得
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_POLITICS')
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
-# 追跡キーワード（完全一致）
+# 追跡キーワード（改善版：具体的で政治特有のもの）
 POLITICAL_KEYWORDS = [
-    # 政党・政治家
-    '自民', '国民民主', '参政', '維新', '滋賀',
-    '高市', '麻生', '片山', '小野田', '茂木', '鈴木', '尾崎', '石原', '安倍晋三', '三日月',
-    '首相', '官房長官', '財務大臣', '外相', '農水相', '環境相', '農林水産大臣',
+    # 政党
+    '自民党', '自民', '国民民主党', '国民民主', '参政党', '日本維新の会', '維新',
     
-    # 政策・イシュー
-    '増税', '減税', '防衛費', '社会保障', '財源',
-    '憲法改正', '安全保障', '外交', '関税', '貿易',
-    '少子化対策', '年金改革', '控除',
+    # 政治家（フルネームまたは役職付き）
+    '高市早苗', '高市経済安保相', '高市大臣',
+    '麻生太郎', '麻生副総裁',
+    '片山さつき',
+    '小野田紀美',
+    '茂木敏充', '茂木幹事長',
+    '鈴木俊一', '鈴木財務大臣', '鈴木財務相',
+    '尾崎正直',
+    '石原伸晃', '石原宏高',
+    '安倍晋三',
+    '三日月大造', '三日月知事',
+    
+    # 役職
+    '首相', '総理大臣', '官房長官', '財務大臣', '外務大臣', '外相', 
+    '農林水産大臣', '農水相', '環境大臣', '環境相', '防衛大臣', '防衛相',
+    
+    # 政治プロセス
+    '国会', '臨時国会', '通常国会', '特別国会',
+    '予算委員会', '本会議', '委員会質疑',
+    '党首討論', '代表質問',
+    '閣議決定', '閣議了解',
+    '法案提出', '法案可決', '法案成立',
+    '施政方針演説', '所信表明演説',
+    
+    # 政策
+    '増税', '減税', '税制改正', '消費税', '所得税',
+    '防衛費', '防衛予算', '防衛力強化',
+    '社会保障', '年金制度', '年金改革',
+    '財源', '予算案', '補正予算',
+    '憲法改正', '安全保障',
+    '関税', '貿易協定',
+    '少子化対策', '子育て支援',
+    '配偶者控除', '扶養控除', '住宅ローン控除',
     
     # 政治イベント
-    '国会', '予算委員会', '党首討論',
-    '選挙', '内閣改造', '解散', '不信任',
-    '政治資金', '政治献金',
-    '支持率', '衆院選',
+    '衆議院選挙', '参議院選挙', '統一地方選',
+    '総裁選', '代表選', '党首選',
+    '内閣改造', '組閣',
+    '解散', '不信任案', '不信任決議',
+    '政治資金', '政治献金', '政治とカネ',
+    '内閣支持率', '政党支持率', '世論調査',
     
     # 国際政治
-    '日米', '日中', '日韓', '米中', '米露', '米ロ',
-    'G7', 'G20', '国連', 'ASEAN',
-    '会談', '紛争', '首脳', '暗殺',
-    'トランプ', 'プーチン', '習近平',
+    '日米首脳会談', '日中首脳会談', '日韓首脳会談',
+    '日米同盟', '日米安全保障',
+    'G7サミット', 'G20サミット',
+    '国連総会', '国連安保理',
+    'ASEAN首脳会議',
+    'トランプ大統領', 'プーチン大統領', '習近平国家主席',
+]
+
+# 除外キーワード（政治と無関係）
+EXCLUDE_KEYWORDS = [
+    # スポーツ
+    'プロレス', '新日本プロレス', 'WWE', 'NJPW', 'DDT',
+    'レスラー', '試合', 'チャンピオン', 'タイトルマッチ', 'リング',
+    'サッカー', 'Jリーグ', 'ワールドカップ', 'プレミアリーグ',
+    '野球', 'プロ野球', 'NPB', 'メジャーリーグ', 'MLB',
+    'バスケ', 'NBA', 'Bリーグ',
+    'テニス', 'ゴルフ', 'ボクシング', '格闘技', 'UFC',
+    
+    # 芸能
+    '芸能', 'アイドル', 'ジャニーズ', 'AKB',
+    '映画', 'ドラマ', 'アニメ', '声優',
+    '俳優', '女優', 'タレント', 'お笑い',
+    
+    # ビジネス（政治と無関係）
+    '新製品', '新商品', 'キャンペーン', 'セール',
+    'ゲーム', 'アプリ', 'スマホ',
 ]
 
 # メディアのRSSフィード設定
@@ -78,14 +130,19 @@ NEWS_FEEDS = {
     },
 }
 
-class PoliticalNewsFilter:
-    """政治ニュースフィルタリングクラス"""
+class GeminiPoliticalFilter:
+    """Gemini APIを使った政治ニュースフィルタリングクラス"""
     
     def __init__(self):
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY環境変数が設定されていません")
+        self.api_key = GEMINI_API_KEY
+        self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
         self.keywords = POLITICAL_KEYWORDS
+        self.exclude_keywords = EXCLUDE_KEYWORDS
         
     def fetch_news_from_feed(self, feed_url: str, source_name: str, max_items: int = 10) -> List[Dict]:
-        """RSSフィードからニュースを取得（多めに取得）"""
+        """RSSフィードからニュースを取得"""
         try:
             feed = feedparser.parse(feed_url)
             articles = []
@@ -106,7 +163,7 @@ class PoliticalNewsFilter:
             return []
     
     def contains_keywords(self, text: str) -> tuple[bool, List[str]]:
-        """テキストがキーワードを含むかチェック（完全一致）"""
+        """キーワードチェック"""
         if not text:
             return False, []
         
@@ -114,20 +171,97 @@ class PoliticalNewsFilter:
         text_lower = text.lower()
         
         for keyword in self.keywords:
-            keyword_lower = keyword.lower()
-            # 完全一致チェック（単語境界を考慮）
-            if keyword_lower in text_lower:
+            if keyword.lower() in text_lower:
                 matched_keywords.append(keyword)
         
         return len(matched_keywords) > 0, matched_keywords
     
-    def filter_political_news(self, all_news: Dict[str, List[Dict]]) -> List[Dict]:
-        """政治関連ニュースのみをフィルタリング"""
-        filtered_news = []
+    def contains_exclude_keywords(self, text: str) -> tuple[bool, List[str]]:
+        """除外キーワードチェック"""
+        if not text:
+            return False, []
         
+        matched_exclude = []
+        text_lower = text.lower()
+        
+        for keyword in self.exclude_keywords:
+            if keyword.lower() in text_lower:
+                matched_exclude.append(keyword)
+        
+        return len(matched_exclude) > 0, matched_exclude
+    
+    def check_political_relevance_with_gemini(self, title: str, summary: str) -> tuple[int, str]:
+        """Gemini APIで政治関連度を判定"""
+        try:
+            prompt = f"""以下のニュースが「日本の国内政治」に関連しているか0-100点で評価してください。
+
+判定基準:
+- 90-100点: 国会、内閣、政党、選挙、法案、政策など明確な政治ニュース
+- 70-89点: 政治家の政治的発言、政治イベント、政治的影響のある経済ニュース
+- 50-69点: 政治家が登場するが政治活動以外の話題（私生活、趣味など）
+- 30-49点: 国際政治や経済ニュースで日本の政治への影響が間接的
+- 0-29点: スポーツ、芸能、ビジネス、事件事故など政治と無関係
+
+ニュース:
+タイトル: {title}
+内容: {summary[:300]}
+
+以下のJSON形式で回答してください:
+{{"score": 数値, "reason": "簡潔な理由"}}"""
+
+            headers = {
+                'Content-Type': 'application/json',
+            }
+            
+            data = {
+                "contents": [{
+                    "parts": [{
+                        "text": prompt
+                    }]
+                }]
+            }
+            
+            response = requests.post(
+                f"{self.api_url}?key={self.api_key}",
+                headers=headers,
+                json=data,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                text_response = result['candidates'][0]['content']['parts'][0]['text']
+                
+                # JSONを抽出
+                import re
+                json_match = re.search(r'\{[^}]+\}', text_response)
+                if json_match:
+                    json_data = json.loads(json_match.group())
+                    score = int(json_data.get('score', 0))
+                    reason = json_data.get('reason', '')
+                    return score, reason
+                else:
+                    # JSONが見つからない場合、数値を探す
+                    score_match = re.search(r'(\d+)点', text_response)
+                    if score_match:
+                        return int(score_match.group(1)), text_response[:100]
+                    return 0, "判定失敗"
+            else:
+                print(f"⚠️ Gemini APIエラー: {response.status_code}")
+                return 50, "API エラー（デフォルト50点）"
+                
+        except Exception as e:
+            print(f"⚠️ Gemini判定エラー: {e}")
+            return 50, f"エラー: {str(e)}"
+    
+    def filter_political_news(self, all_news: Dict[str, List[Dict]]) -> List[Dict]:
+        """政治関連ニュースをフィルタリング"""
+        candidate_news = []
+        
+        # ステップ1: キーワードフィルタ
+        print("\n🔍 ステップ1: キーワードフィルタリング")
         for source_name, articles in all_news.items():
             for article in articles:
-                # タイトルと概要をチェック
                 title = article['title']
                 summary = self._clean_html(article['summary'])
                 full_text = f"{title} {summary}"
@@ -135,13 +269,39 @@ class PoliticalNewsFilter:
                 has_keyword, matched = self.contains_keywords(full_text)
                 
                 if has_keyword:
+                    # ステップ2: 除外キーワードチェック
+                    has_exclude, exclude_matched = self.contains_exclude_keywords(full_text)
+                    
+                    if has_exclude:
+                        print(f"❌ 除外: 【{source_name}】 {title[:50]}... (除外ワード: {', '.join(exclude_matched[:2])})")
+                        continue
+                    
                     article['matched_keywords'] = matched
-                    article['priority'] = len(matched)  # マッチ数で優先度判定
-                    filtered_news.append(article)
-                    print(f"✅ 【{source_name}】 {title[:50]}... (キーワード: {', '.join(matched[:3])})")
+                    candidate_news.append(article)
+                    print(f"✅ 候補: 【{source_name}】 {title[:50]}... (キーワード: {', '.join(matched[:3])})")
         
-        # 優先度順にソート
-        filtered_news.sort(key=lambda x: x['priority'], reverse=True)
+        print(f"\n📊 キーワードマッチ: {len(candidate_news)}件")
+        
+        # ステップ3: Gemini AIで最終判定
+        print("\n🤖 ステップ2: Gemini AIによる政治関連度判定")
+        filtered_news = []
+        
+        for article in candidate_news:
+            title = article['title']
+            summary = self._clean_html(article['summary'])
+            
+            score, reason = self.check_political_relevance_with_gemini(title, summary)
+            article['political_score'] = score
+            article['ai_reason'] = reason
+            
+            if score >= 70:  # 70点以上で合格
+                filtered_news.append(article)
+                print(f"✅ 合格 [{score}点]: {title[:50]}... (理由: {reason[:50]})")
+            else:
+                print(f"❌ 不合格 [{score}点]: {title[:50]}... (理由: {reason[:50]})")
+        
+        # スコア順にソート
+        filtered_news.sort(key=lambda x: x['political_score'], reverse=True)
         
         return filtered_news
     
@@ -179,6 +339,8 @@ class DiscordNotifier:
         """フィルタリングされた政治ニュースを送信"""
         if not filtered_news:
             print("📭 政治関連ニュースはありませんでした")
+            # 空でも通知する場合
+            self._send_message("🏛️ **国内政治ニュース速報** 🏛️\n\n📭 この1時間で政治関連ニュースは検出されませんでした。")
             return True
         
         # メッセージを整形
@@ -193,10 +355,11 @@ class DiscordNotifier:
             source = article['source']
             title = article['title']
             link = article['link']
-            keywords = article['matched_keywords'][:5]  # 最大5個まで
+            score = article.get('political_score', 0)
+            keywords = article['matched_keywords'][:3]
             
             message += f"**{i}. [{source}]** {title}\n"
-            message += f"🔑 キーワード: {', '.join(keywords)}\n"
+            message += f"🎯 政治関連度: {score}点 | 🔑 {', '.join(keywords)}\n"
             message += f"🔗 {link}\n\n"
             
             # Discordの文字数制限対策
@@ -239,13 +402,13 @@ class DiscordNotifier:
 def main():
     """メイン処理"""
     print("=" * 60)
-    print("🏛️ 国内政治ニュース監視システム起動（1時間ごと）")
+    print("🏛️ 国内政治ニュース監視システム起動（Gemini AI搭載）")
     print(f"⏰ 実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
     
     try:
         # ニュース収集
-        filter_system = PoliticalNewsFilter()
+        filter_system = GeminiPoliticalFilter()
         all_news = filter_system.fetch_all_news()
         
         # 取得件数の確認
@@ -257,10 +420,9 @@ def main():
             return
         
         # 政治ニュースをフィルタリング
-        print("\n🔍 政治関連ニュースをフィルタリング中...")
         filtered_news = filter_system.filter_political_news(all_news)
         
-        print(f"\n✅ {len(filtered_news)} 件の政治ニュースを検出")
+        print(f"\n✅ {len(filtered_news)} 件の政治ニュースを検出（70点以上）")
         
         # Discord投稿
         notifier = DiscordNotifier(DISCORD_WEBHOOK_URL)
