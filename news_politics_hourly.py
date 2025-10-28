@@ -395,12 +395,16 @@ def main():
         print("❌ GEMINI_API_KEY が設定されていません")
         sys.exit(1)
     
-    # 全フィードからニュースを取得
+   # 全フィードからニュースを取得
     all_entries = []
     for source_name, feed_url in NEWS_FEEDS.items():
         print(f"📡 {source_name} から取得中...")
         try:
-            feed = feedparser.parse(feed_url)
+            # User-Agentを設定してブラウザとして認識させる
+            feed = feedparser.parse(
+                feed_url,
+                agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
             
             # デバッグ情報を追加
             print(f"  📊 フィード情報: status={getattr(feed, 'status', 'N/A')}, version={getattr(feed, 'version', 'N/A')}")
@@ -409,6 +413,13 @@ def main():
             # エラーチェック
             if hasattr(feed, 'bozo') and feed.bozo:
                 print(f"  ⚠️ フィード解析エラー: {feed.bozo_exception}")
+            
+            # エントリが0件の場合の詳細情報
+            if len(feed.entries) == 0:
+                print(f"  ⚠️ エントリが取得できませんでした")
+                print(f"  📊 フィードURL: {feed_url}")
+                if hasattr(feed, 'headers'):
+                    print(f"  📊 レスポンスヘッダー: {feed.headers}")
             
             for entry in feed.entries[:20]:  # 各ソース最大20件
                 title = entry.get('title', '')
@@ -424,9 +435,8 @@ def main():
             print(f"  ✅ {len(feed.entries[:20])}件取得")
         except Exception as e:
             print(f"  ❌ エラー: {type(e).__name__}: {e}")
-
-    
-    print(f"\n合計: {len(all_entries)}件のニュースを取得")
+            import traceback
+            print(f"  📊 詳細: {traceback.format_exc()}")
     
     # 政治ニュースをフィルタリング
     political_news = filter_political_news(all_entries)
