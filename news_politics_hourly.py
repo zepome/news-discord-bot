@@ -12,9 +12,12 @@ import feedparser
 import requests
 import google.generativeai as genai
 
-# 環境変数
+# 環境変数の取得
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_POLITICS')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+POLITICAL_SCORE_THRESHOLD = int(os.environ.get('POLITICAL_SCORE_THRESHOLD', '60'))
+MAX_NEWS_TO_POST = int(os.environ.get('MAX_NEWS_TO_POST', '3'))
+
 
 # Gemini API設定
 if GEMINI_API_KEY:
@@ -130,7 +133,7 @@ def main():
         score = check_political_relevance(entry['title'], entry['description'])
         entry['score'] = score
         
-        if score >= 60:  # 60点以上
+        if score >= POLITICAL_SCORE_THRESHOLD:
             political_news.append(entry)
             print(f"  ✅ [{score}点] {entry['title']}")
         else:
@@ -148,7 +151,7 @@ def main():
         return
     
     posted = 0
-    for news in political_news[:3]:  # 上位3件
+    for news in political_news[:MAX_NEWS_TO_POST]:
         content = f"**【政治ニュース】{news['title']}**\n"
         content += f"📰 出典: {news['source']}\n"
         content += f"🎯 関連度: {news['score']}点\n"
