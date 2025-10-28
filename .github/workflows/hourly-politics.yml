@@ -31,5 +31,7 @@ jobs:
       env:
         DISCORD_WEBHOOK_POLITICS: ${{ secrets.DISCORD_WEBHOOK_POLITICS }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        POLITICAL_SCORE_THRESHOLD: 55
+        MAX_NEWS_TO_POST: 5
       run: |
         python news_politics_hourly.py
