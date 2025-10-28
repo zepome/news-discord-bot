@@ -111,7 +111,7 @@ def create_discord_message(news_item, sentiment_analysis=None):
     content += f"📰 **出典**: {source}\n"
     content += f"🎯 **関連度**: {score}点 {stars}\n"
     content += f"⏰ **取得時刻**: {time_str}\n"
-    content += f"🔗 [記事を読む](<{link}>)\n"
+    content += f"🔗 {link}\n"
     
     # 世論分析がある場合（将来の拡張用）
     if sentiment_analysis:
