@@ -28,6 +28,7 @@ jobs:
     - name: 政治ニュース取得・フィルタ・投稿
       env:
         DISCORD_WEBHOOK_POLITICS: ${{ secrets.DISCORD_WEBHOOK_POLITICS }}
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       run: |
         python news_politics_hourly.py
+
