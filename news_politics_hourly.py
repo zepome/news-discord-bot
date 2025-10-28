@@ -1,444 +1,458 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-国内政治ニュース自動監視システム（1時間ごと）
-Gemini APIによる高精度フィルタリング
+政治ニュース自動収集Bot（世論分析機能付き）
+毎時、複数のRSSフィードから政治関連ニュースを取得し、Discordに投稿
+Yahoo!ニュースのコメントを分析して世論の傾向も表示
 """
 
 import os
 import sys
 import re
-import requests
-import json
+import time
 from datetime import datetime
 from typing import List, Dict, Optional
 import feedparser
+import requests
+from bs4 import BeautifulSoup
+import google.generativeai as genai
 
-# 環境変数から取得
+# 環境変数の取得
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_POLITICS')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
-# 追跡キーワード（改善版：具体的で政治特有のもの）
+# Gemini API設定
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+
+# 政治関連キーワード（3段階フィルタリング用）
 POLITICAL_KEYWORDS = [
     # 政党
-    '自民党', '自民', '国民民主党', '国民民主', '参政党', '日本維新の会', '維新',
-    
-    # 政治家（フルネームまたは役職付き）
-    '高市早苗', '高市経済安保相', '高市大臣',
-    '麻生太郎', '麻生副総裁',
-    '片山さつき',
-    '小野田紀美',
-    '茂木敏充', '茂木幹事長',
-    '鈴木俊一', '鈴木財務大臣', '鈴木財務相',
-    '尾崎正直',
-    '石原伸晃', '石原宏高',
-    '安倍晋三',
-    '三日月大造', '三日月知事',
-    
+    '自民', '国民民主', '参政', '維新', '立憲', '共産', '公明', '社民', '令和', 'れいわ',
+    # 政治家
+    '高市', '麻生', '片山', '小野田', '茂木', '鈴木俊一', '尾崎', '石原', '安倍晋三', '三日月',
+    '岸田', '河野', '石破', '小泉', '野田', '枝野', '志位', '玉木', '馬場',
     # 役職
-    '首相', '総理大臣', '官房長官', '財務大臣', '外務大臣', '外相', 
-    '農林水産大臣', '農水相', '環境大臣', '環境相', '防衛大臣', '防衛相',
-    
-    # 政治プロセス
-    '国会', '臨時国会', '通常国会', '特別国会',
-    '予算委員会', '本会議', '委員会質疑',
-    '党首討論', '代表質問',
-    '閣議決定', '閣議了解',
-    '法案提出', '法案可決', '法案成立',
-    '施政方針演説', '所信表明演説',
-    
-    # 政策
-    '増税', '減税', '税制改正', '消費税', '所得税',
-    '防衛費', '防衛予算', '防衛力強化',
-    '社会保障', '年金制度', '年金改革',
-    '財源', '予算案', '補正予算',
-    '憲法改正', '安全保障',
-    '関税', '貿易協定',
-    '少子化対策', '子育て支援',
-    '配偶者控除', '扶養控除', '住宅ローン控除',
-    
-    # 政治イベント
-    '衆議院選挙', '参議院選挙', '統一地方選',
-    '総裁選', '代表選', '党首選',
-    '内閣改造', '組閣',
-    '解散', '不信任案', '不信任決議',
-    '政治資金', '政治献金', '政治とカネ',
-    '内閣支持率', '政党支持率', '世論調査',
-    
+    '首相', '総理', '大臣', '官房長官', '財務大臣', '外相', '防衛相', '農水相', '環境相',
+    '厚労相', '文科相', '経産相', '国交相', '総務相', '法相', '内閣府',
+    # 政策・制度
+    '増税', '減税', '防衛費', '社会保障', '財源', '憲法改正', '安全保障', '関税', '貿易',
+    '少子化対策', '年金改革', '控除', '給付金', '補助金', '予算', '税制',
+    # イベント・制度
+    '国会', '予算委員会', '党首討論', '選挙', '内閣改造', '解散', '不信任', '政治資金',
+    '政治献金', '支持率', '衆院選', '参院選', '補選', '地方選',
     # 国際政治
-    '日米首脳会談', '日中首脳会談', '日韓首脳会談',
-    '日米同盟', '日米安全保障',
-    'G7サミット', 'G20サミット',
-    '国連総会', '国連安保理',
-    'ASEAN首脳会議',
-    'トランプ大統領', 'プーチン大統領', '習近平国家主席',
+    '日米', '日中', '日韓', '米中', '米露', '米ロ', 'G7', 'G20', '国連', 'ASEAN',
+    '会談', '首脳', 'サミット', 'トランプ', 'プーチン', '習近平', 'バイデン'
 ]
 
-# 除外キーワード（政治と無関係）
+# 除外キーワード（スポーツ・芸能等）
 EXCLUDE_KEYWORDS = [
     # スポーツ
-    'プロレス', '新日本プロレス', 'WWE', 'NJPW', 'DDT',
-    'レスラー', '試合', 'チャンピオン', 'タイトルマッチ', 'リング',
-    'サッカー', 'Jリーグ', 'ワールドカップ', 'プレミアリーグ',
-    '野球', 'プロ野球', 'NPB', 'メジャーリーグ', 'MLB',
-    'バスケ', 'NBA', 'Bリーグ',
-    'テニス', 'ゴルフ', 'ボクシング', '格闘技', 'UFC',
-    
+    'プロレス', '新日本プロレス', 'サッカー', '野球', 'バスケ', 'テニス', 'ゴルフ',
+    '格闘技', 'ボクシング', 'レスリング', '五輪', 'オリンピック', 'W杯',
     # 芸能
-    '芸能', 'アイドル', 'ジャニーズ', 'AKB',
-    '映画', 'ドラマ', 'アニメ', '声優',
-    '俳優', '女優', 'タレント', 'お笑い',
-    
-    # ビジネス（政治と無関係）
-    '新製品', '新商品', 'キャンペーン', 'セール',
-    'ゲーム', 'アプリ', 'スマホ',
+    '映画', 'ドラマ', 'アイドル', '俳優', '女優', 'タレント', 'ミュージシャン',
+    '歌手', 'バンド', 'アニメ', 'ゲーム',
+    # その他
+    '鈴木みのる', '鈴木軍'  # 誤検出対策
 ]
 
-# メディアのRSSフィード設定
+# RSSフィードのURL
 NEWS_FEEDS = {
-    '日経新聞': {
-        'url': 'https://www.nikkei.com/rss/',
-        'language': '日本語'
-    },
-    'ロイター通信': {
-        'url': 'https://jp.reuters.com/rssFeed/topNews',
-        'language': '日本語'
-    },
-    '東洋経済オンライン': {
-        'url': 'https://toyokeizai.net/list/feed/rss',
-        'language': '日本語'
-    },
-    'PRタイムス': {
-        'url': 'https://prtimes.jp/main/rss/',
-        'language': '日本語'
-    },
-    '時事ドットコム': {
-        'url': 'https://www.jiji.com/rss/atom.xml',
-        'language': '日本語'
-    },
-    'Bloomberg': {
-        'url': 'https://feeds.bloomberg.com/markets/news.rss',
-        'language': 'English'
-    },
-    'FXStreet': {
-        'url': 'https://www.fxstreet.com/rss/news',
-        'language': 'English'
-    },
-    'Reuters (英語版)': {
-        'url': 'https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best',
-        'language': 'English'
-    },
+    '日本経済新聞': 'https://www.nikkei.com/rss/',
+    '読売新聞': 'https://www.yomiuri.co.jp/rss/l-news.xml',
+    '朝日新聞': 'https://www.asahi.com/rss/asahi/newsheadlines.rdf',
+    '毎日新聞': 'https://mainichi.jp/rss/etc/mainichi-flash.rss',
+    'NHK': 'https://www.nhk.or.jp/rss/news/cat0.xml',
+    'BBC News': 'https://feeds.bbci.co.uk/news/world/rss.xml',
+    'Reuters': 'https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best',
+    'CNN': 'http://rss.cnn.com/rss/edition_world.rss'
 }
 
-class GeminiPoliticalFilter:
-    """Gemini APIを使った政治ニュースフィルタリングクラス"""
-    
-    def __init__(self):
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY環境変数が設定されていません")
-        self.api_key = GEMINI_API_KEY
-        self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
-        self.keywords = POLITICAL_KEYWORDS
-        self.exclude_keywords = EXCLUDE_KEYWORDS
-        
-    def fetch_news_from_feed(self, feed_url: str, source_name: str, max_items: int = 10) -> List[Dict]:
-        """RSSフィードからニュースを取得"""
-        try:
-            feed = feedparser.parse(feed_url)
-            articles = []
-            
-            for entry in feed.entries[:max_items]:
-                article = {
-                    'source': source_name,
-                    'title': entry.get('title', ''),
-                    'link': entry.get('link', ''),
-                    'summary': entry.get('summary', entry.get('description', '')),
-                    'published': entry.get('published', ''),
-                }
-                articles.append(article)
-            
-            return articles
-        except Exception as e:
-            print(f"⚠️ {source_name}のフィード取得エラー: {e}")
-            return []
-    
-    def contains_keywords(self, text: str) -> tuple[bool, List[str]]:
-        """キーワードチェック"""
-        if not text:
-            return False, []
-        
-        matched_keywords = []
-        text_lower = text.lower()
-        
-        for keyword in self.keywords:
-            if keyword.lower() in text_lower:
-                matched_keywords.append(keyword)
-        
-        return len(matched_keywords) > 0, matched_keywords
-    
-    def contains_exclude_keywords(self, text: str) -> tuple[bool, List[str]]:
-        """除外キーワードチェック"""
-        if not text:
-            return False, []
-        
-        matched_exclude = []
-        text_lower = text.lower()
-        
-        for keyword in self.exclude_keywords:
-            if keyword.lower() in text_lower:
-                matched_exclude.append(keyword)
-        
-        return len(matched_exclude) > 0, matched_exclude
-    
-    def check_political_relevance_with_gemini(self, title: str, summary: str) -> tuple[int, str]:
-        """Gemini APIで政治関連度を判定"""
-        try:
-            prompt = f"""以下のニュースが「日本の国内政治」に関連しているか0-100点で評価してください。
 
-判定基準:
-- 90-100点: 国会、内閣、政党、選挙、法案、政策など明確な政治ニュース
-- 70-89点: 政治家の政治的発言、政治イベント、政治的影響のある経済ニュース
-- 50-69点: 政治家が登場するが政治活動以外の話題（私生活、趣味など）
-- 30-49点: 国際政治や経済ニュースで日本の政治への影響が間接的
-- 0-29点: スポーツ、芸能、ビジネス、事件事故など政治と無関係
+def check_political_relevance(title: str, description: str) -> int:
+    """
+    Gemini APIを使用してニュースの政治関連度を判定
+    
+    Args:
+        title: ニュースのタイトル
+        description: ニュースの説明文
+    
+    Returns:
+        政治関連度スコア（0-100点）
+    """
+    if not GEMINI_API_KEY:
+        return 0
+    
+    try:
+        prompt = f"""
+以下のニュースが「日本の政治」にどれだけ関連しているか、0〜100点で評価してください。
 
-ニュース:
+評価基準：
+- 90-100点: 日本の政治・政策の中核的な話題（選挙、国会、内閣、法案、政治家の重要発言等）
+- 70-89点: 日本の政治に直接関係する話題（政府の政策決定、政治資金、支持率等）
+- 50-69点: 政治と関連があるが間接的（経済政策の影響、国際関係等）
+- 30-49点: 政治的要素を含むが主題ではない
+- 0-29点: 政治とほぼ無関係（スポーツ、芸能、一般ニュース等）
+
 タイトル: {title}
-内容: {summary[:300]}
+説明: {description}
 
-以下のJSON形式で回答してください:
-{{"score": 数値, "reason": "簡潔な理由"}}"""
+数字のみで回答してください（例: 85）
+"""
+        
+        response = model.generate_content(prompt)
+        score_text = response.text.strip()
+        
+        # 数字のみ抽出
+        score_match = re.search(r'\d+', score_text)
+        if score_match:
+            score = int(score_match.group())
+            return min(100, max(0, score))  # 0-100に制限
+        
+        return 0
+    
+    except Exception as e:
+        print(f"⚠️ Gemini API判定エラー: {e}")
+        return 0
 
-            headers = {
-                'Content-Type': 'application/json',
+
+def filter_political_news(entries: List[Dict]) -> List[Dict]:
+    """
+    3段階フィルタリングで政治ニュースを抽出
+    
+    1. キーワードマッチ（高速）
+    2. 除外ワードチェック（誤検出除去）
+    3. Gemini AI判定（精度向上）
+    """
+    print(f"\n📊 フィルタリング開始: {len(entries)}件")
+    
+    # ステップ1: キーワードマッチ
+    keyword_matched = []
+    for entry in entries:
+        title = entry.get('title', '')
+        description = entry.get('description', '')
+        combined = f"{title} {description}"
+        
+        if any(keyword in combined for keyword in POLITICAL_KEYWORDS):
+            keyword_matched.append(entry)
+    
+    print(f"✅ キーワードマッチ: {len(keyword_matched)}件")
+    
+    # ステップ2: 除外ワードチェック
+    exclude_filtered = []
+    for entry in keyword_matched:
+        title = entry.get('title', '')
+        description = entry.get('description', '')
+        combined = f"{title} {description}"
+        
+        if not any(exclude in combined for exclude in EXCLUDE_KEYWORDS):
+            exclude_filtered.append(entry)
+    
+    print(f"✅ 除外ワード後: {len(exclude_filtered)}件")
+    
+    # ステップ3: Gemini AI判定
+    political_news = []
+    for entry in exclude_filtered:
+        title = entry.get('title', '')
+        description = entry.get('description', '')
+        
+        score = check_political_relevance(title, description)
+        entry['political_score'] = score
+        
+        if score >= 70:  # 70点以上のみ通過
+            political_news.append(entry)
+            print(f"  ✅ [{score}点] {title}")
+        else:
+            print(f"  ❌ [{score}点] {title}")
+        
+        time.sleep(0.5)  # API制限対策
+    
+    print(f"✅ 最終結果: {len(political_news)}件\n")
+    return political_news
+
+
+def search_yahoo_news(title: str) -> Optional[str]:
+    """
+    Yahoo!ニュースでタイトル検索してURLを取得
+    
+    Args:
+        title: 検索するニュースタイトル
+    
+    Returns:
+        Yahoo!ニュースのURL（見つからない場合はNone）
+    """
+    try:
+        search_url = f"https://news.yahoo.co.jp/search?p={requests.utils.quote(title)}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(search_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'lxml')
+        
+        # 検索結果の最初のリンクを取得
+        first_result = soup.select_one('a[href*="news.yahoo.co.jp/articles/"]')
+        if first_result:
+            return first_result['href']
+        
+        return None
+    
+    except Exception as e:
+        print(f"⚠️ Yahoo!ニュース検索エラー: {e}")
+        return None
+
+
+def get_yahoo_comments(article_url: str, max_comments: int = 100) -> List[Dict]:
+    """
+    Yahoo!ニュースのコメントを取得
+    
+    Args:
+        article_url: Yahoo!ニュース記事のURL
+        max_comments: 取得する最大コメント数
+    
+    Returns:
+        コメントのリスト
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(article_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'lxml')
+        
+        comments = []
+        comment_elements = soup.select('.comment-item')[:max_comments]
+        
+        for elem in comment_elements:
+            text_elem = elem.select_one('.comment-text')
+            likes_elem = elem.select_one('.likes-count')
+            
+            if text_elem:
+                comment = {
+                    'text': text_elem.get_text(strip=True),
+                    'likes': int(likes_elem.get_text(strip=True)) if likes_elem else 0
+                }
+                comments.append(comment)
+        
+        return comments
+    
+    except Exception as e:
+        print(f"⚠️ コメント取得エラー: {e}")
+        return []
+
+
+def analyze_sentiment(comments: List[Dict]) -> Dict:
+    """
+    Gemini APIでコメントの感情分析
+    
+    Args:
+        comments: コメントのリスト
+    
+    Returns:
+        分析結果
+    """
+    if not comments or not GEMINI_API_KEY:
+        return None
+    
+    try:
+        # 上位20件のコメントを分析対象にする
+        top_comments = sorted(comments, key=lambda x: x['likes'], reverse=True)[:20]
+        comments_text = "\n".join([f"- {c['text']}" for c in top_comments])
+        
+        prompt = f"""
+以下のYahoo!ニュースコメントを分析してください。
+
+【コメント一覧】
+{comments_text}
+
+以下の形式で回答してください：
+
+1. 感情分布（%で表記）
+賛成: XX%
+反対: XX%
+中立: XX%
+
+2. 議論の熱量（0-100点）
+XX点
+
+3. 主要論点（3つ）
+- 論点1
+- 論点2
+- 論点3
+
+4. 代表的コメント（賛成・反対から各1つ）
+【賛成】コメント内容
+【反対】コメント内容
+
+5. 全体的傾向（1-2文）
+"""
+        
+        response = model.generate_content(prompt)
+        analysis_text = response.text.strip()
+        
+        # 結果をパース
+        result = {'raw_analysis': analysis_text}
+        
+        # 感情分布の抽出
+        agree_match = re.search(r'賛成[：:]\s*(\d+)%', analysis_text)
+        oppose_match = re.search(r'反対[：:]\s*(\d+)%', analysis_text)
+        neutral_match = re.search(r'中立[：:]\s*(\d+)%', analysis_text)
+        
+        if agree_match and oppose_match and neutral_match:
+            result['sentiment'] = {
+                'agree': int(agree_match.group(1)),
+                'oppose': int(oppose_match.group(1)),
+                'neutral': int(neutral_match.group(1))
             }
-            
-            data = {
-                "contents": [{
-                    "parts": [{
-                        "text": prompt
-                    }]
-                }]
-            }
-            
-            response = requests.post(
-                f"{self.api_url}?key={self.api_key}",
-                headers=headers,
-                json=data,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                text_response = result['candidates'][0]['content']['parts'][0]['text']
-                
-                # JSONを抽出
-                import re
-                json_match = re.search(r'\{[^}]+\}', text_response)
-                if json_match:
-                    json_data = json.loads(json_match.group())
-                    score = int(json_data.get('score', 0))
-                    reason = json_data.get('reason', '')
-                    return score, reason
-                else:
-                    # JSONが見つからない場合、数値を探す
-                    score_match = re.search(r'(\d+)点', text_response)
-                    if score_match:
-                        return int(score_match.group(1)), text_response[:100]
-                    return 0, "判定失敗"
-            else:
-                print(f"⚠️ Gemini APIエラー: {response.status_code}")
-                return 50, "API エラー（デフォルト50点）"
-                
-        except Exception as e:
-            print(f"⚠️ Gemini判定エラー: {e}")
-            return 50, f"エラー: {str(e)}"
+        
+        # 熱量スコアの抽出
+        heat_match = re.search(r'(\d+)点', analysis_text)
+        if heat_match:
+            result['heat_score'] = int(heat_match.group(1))
+        
+        return result
     
-    def filter_political_news(self, all_news: Dict[str, List[Dict]]) -> List[Dict]:
-        """政治関連ニュースをフィルタリング"""
-        candidate_news = []
-        
-        # ステップ1: キーワードフィルタ
-        print("\n🔍 ステップ1: キーワードフィルタリング")
-        for source_name, articles in all_news.items():
-            for article in articles:
-                title = article['title']
-                summary = self._clean_html(article['summary'])
-                full_text = f"{title} {summary}"
-                
-                has_keyword, matched = self.contains_keywords(full_text)
-                
-                if has_keyword:
-                    # ステップ2: 除外キーワードチェック
-                    has_exclude, exclude_matched = self.contains_exclude_keywords(full_text)
-                    
-                    if has_exclude:
-                        print(f"❌ 除外: 【{source_name}】 {title[:50]}... (除外ワード: {', '.join(exclude_matched[:2])})")
-                        continue
-                    
-                    article['matched_keywords'] = matched
-                    candidate_news.append(article)
-                    print(f"✅ 候補: 【{source_name}】 {title[:50]}... (キーワード: {', '.join(matched[:3])})")
-        
-        print(f"\n📊 キーワードマッチ: {len(candidate_news)}件")
-        
-        # ステップ3: Gemini AIで最終判定
-        print("\n🤖 ステップ2: Gemini AIによる政治関連度判定")
-        filtered_news = []
-        
-        for article in candidate_news:
-            title = article['title']
-            summary = self._clean_html(article['summary'])
-            
-            score, reason = self.check_political_relevance_with_gemini(title, summary)
-            article['political_score'] = score
-            article['ai_reason'] = reason
-            
-            if score >= 70:  # 70点以上で合格
-                filtered_news.append(article)
-                print(f"✅ 合格 [{score}点]: {title[:50]}... (理由: {reason[:50]})")
-            else:
-                print(f"❌ 不合格 [{score}点]: {title[:50]}... (理由: {reason[:50]})")
-        
-        # スコア順にソート
-        filtered_news.sort(key=lambda x: x['political_score'], reverse=True)
-        
-        return filtered_news
-    
-    def fetch_all_news(self) -> Dict[str, List[Dict]]:
-        """全メディアからニュースを取得"""
-        all_news = {}
-        
-        for source_name, config in NEWS_FEEDS.items():
-            feed_url = config['url']
-            language = config['language']
-            print(f"📰 {source_name}（{language}）からニュースを取得中...")
-            articles = self.fetch_news_from_feed(feed_url, source_name)
-            all_news[source_name] = articles
-            print(f"  → {len(articles)}件取得")
-        
-        return all_news
-    
-    def _clean_html(self, text: str) -> str:
-        """HTMLタグを除去"""
-        text = re.sub(r'<[^>]+>', '', text)
-        text = text.replace('&nbsp;', ' ').replace('&amp;', '&')
-        text = text.replace('&lt;', '<').replace('&gt;', '>')
-        text = text.replace('&quot;', '"')
-        return text.strip()
+    except Exception as e:
+        print(f"⚠️ 感情分析エラー: {e}")
+        return None
 
-class DiscordNotifier:
-    """Discord通知クラス"""
+
+def create_discord_message(news_item: Dict, sentiment_analysis: Optional[Dict]) -> Dict:
+    """
+    Discord投稿用のメッセージを作成
     
-    def __init__(self, webhook_url: str):
-        if not webhook_url:
-            raise ValueError("DISCORD_WEBHOOK_POLITICS環境変数が設定されていません")
-        self.webhook_url = webhook_url
+    Args:
+        news_item: ニュース項目
+        sentiment_analysis: 世論分析結果
     
-    def send_political_news(self, filtered_news: List[Dict]) -> bool:
-        """フィルタリングされた政治ニュースを送信"""
-        if not filtered_news:
-            print("📭 政治関連ニュースはありませんでした")
-            # 空でも通知する場合
-            self._send_message("🏛️ **国内政治ニュース速報** 🏛️\n\n📭 この1時間で政治関連ニュースは検出されませんでした。")
-            return True
-        
-        # メッセージを整形
-        now = datetime.now().strftime('%Y年%m月%d日 %H:%M')
-        message = f"🏛️ **国内政治ニュース速報** 🏛️\n"
-        message += f"⏰ 更新時刻: {now}\n"
-        message += f"📊 検出件数: {len(filtered_news)}件\n"
-        message += "=" * 50 + "\n\n"
-        
-        # 上位15件まで表示
-        for i, article in enumerate(filtered_news[:15], 1):
-            source = article['source']
-            title = article['title']
-            link = article['link']
-            score = article.get('political_score', 0)
-            keywords = article['matched_keywords'][:3]
-            
-            message += f"**{i}. [{source}]** {title}\n"
-            message += f"🎯 政治関連度: {score}点 | 🔑 {', '.join(keywords)}\n"
-            message += f"🔗 {link}\n\n"
-            
-            # Discordの文字数制限対策
-            if len(message) > 1800:
-                self._send_message(message)
-                message = ""
-        
-        # 残りを送信
-        if message:
-            self._send_message(message)
-        
+    Returns:
+        Discordメッセージ
+    """
+    title = news_item.get('title', 'タイトルなし')
+    link = news_item.get('link', '')
+    source = news_item.get('source', '不明')
+    score = news_item.get('political_score', 0)
+    
+    # 基本メッセージ
+    content = f"**【政治ニュース】{title}**\n"
+    content += f"📰 出典: {source}\n"
+    content += f"🎯 関連度: {score}点\n"
+    content += f"🔗 {link}\n"
+    
+    # 世論分析が利用可能な場合
+    if sentiment_analysis:
+        content += "\n" + "="*50 + "\n"
+        content += "**📊 世論分析**\n\n"
+        content += sentiment_analysis.get('raw_analysis', '分析結果なし')
+    
+    return {'content': content}
+
+
+def send_to_discord(message: Dict) -> bool:
+    """
+    Discordに投稿
+    
+    Args:
+        message: 投稿メッセージ
+    
+    Returns:
+        成功した場合True
+    """
+    if not DISCORD_WEBHOOK_URL:
+        print("❌ Discord Webhook URLが設定されていません")
+        return False
+    
+    try:
+        response = requests.post(DISCORD_WEBHOOK_URL, json=message, timeout=10)
+        response.raise_for_status()
         return True
     
-    def _send_message(self, content: str) -> bool:
-        """Discordにメッセージを送信"""
-        try:
-            payload = {
-                "content": content,
-                "username": "国内政治ウォッチャー 🏛️",
-                "avatar_url": "https://cdn-icons-png.flaticon.com/512/3649/3649371.png"
-            }
-            
-            response = requests.post(
-                self.webhook_url,
-                json=payload,
-                headers={'Content-Type': 'application/json'}
-            )
-            
-            if response.status_code == 204:
-                print("✅ Discordへの投稿成功")
-                return True
-            else:
-                print(f"❌ Discord投稿エラー: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Discord送信エラー: {e}")
-            return False
+    except Exception as e:
+        print(f"❌ Discord投稿エラー: {e}")
+        return False
+
 
 def main():
     """メイン処理"""
     print("=" * 60)
-    print("🏛️ 国内政治ニュース監視システム起動（Gemini AI搭載）")
-    print(f"⏰ 実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("🏛️ 政治ニュース自動収集Bot（世論分析機能付き）")
     print("=" * 60)
+    print(f"実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
-    try:
-        # ニュース収集
-        filter_system = GeminiPoliticalFilter()
-        all_news = filter_system.fetch_all_news()
+    # 環境変数チェック
+    if not DISCORD_WEBHOOK_URL:
+        print("❌ DISCORD_WEBHOOK_POLITICS が設定されていません")
+        sys.exit(1)
+    
+    if not GEMINI_API_KEY:
+        print("❌ GEMINI_API_KEY が設定されていません")
+        sys.exit(1)
+    
+    # 全フィードからニュースを取得
+    all_entries = []
+    for source_name, feed_url in NEWS_FEEDS.items():
+        print(f"📡 {source_name} から取得中...")
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:20]:  # 各ソース最大20件
+                all_entries.append({
+                    'title': entry.get('title', ''),
+                    'description': entry.get('description', ''),
+                    'link': entry.get('link', ''),
+                    'source': source_name
+                })
+            print(f"  ✅ {len(feed.entries[:20])}件取得")
+        except Exception as e:
+            print(f"  ❌ エラー: {e}")
+    
+    print(f"\n合計: {len(all_entries)}件のニュースを取得")
+    
+    # 政治ニュースをフィルタリング
+    political_news = filter_political_news(all_entries)
+    
+    if not political_news:
+        print("\n政治関連ニュースが見つかりませんでした")
+        return
+    
+    # 各ニュースを処理
+    posted_count = 0
+    for news in political_news[:5]:  # 上位5件のみ処理
+        print(f"\n処理中: {news['title']}")
         
-        # 取得件数の確認
-        total_articles = sum(len(articles) for articles in all_news.values())
-        print(f"\n📊 合計 {total_articles} 件のニュースを取得")
+        # Yahoo!ニュース検索
+        yahoo_url = search_yahoo_news(news['title'])
         
-        if total_articles == 0:
-            print("⚠️ ニュースが取得できませんでした")
-            return
-        
-        # 政治ニュースをフィルタリング
-        filtered_news = filter_system.filter_political_news(all_news)
-        
-        print(f"\n✅ {len(filtered_news)} 件の政治ニュースを検出（70点以上）")
+        # 世論分析
+        sentiment_analysis = None
+        if yahoo_url:
+            print(f"  ✅ Yahoo!ニュース発見: {yahoo_url}")
+            comments = get_yahoo_comments(yahoo_url, max_comments=100)
+            
+            if comments:
+                print(f"  ✅ コメント取得: {len(comments)}件")
+                sentiment_analysis = analyze_sentiment(comments)
+                time.sleep(1)  # API制限対策
         
         # Discord投稿
-        notifier = DiscordNotifier(DISCORD_WEBHOOK_URL)
-        success = notifier.send_political_news(filtered_news)
-        
-        if success:
-            print("\n🎉 処理完了！")
+        message = create_discord_message(news, sentiment_analysis)
+        if send_to_discord(message):
+            posted_count += 1
+            print(f"  ✅ Discord投稿成功")
+            time.sleep(2)  # Webhook制限対策
         else:
-            print("\n⚠️ Discord投稿に失敗しました")
-            sys.exit(1)
-            
-    except Exception as e:
-        print(f"\n❌ エラーが発生しました: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+            print(f"  ❌ Discord投稿失敗")
+    
+    print("\n" + "=" * 60)
+    print(f"✅ 完了: {posted_count}件のニュースを投稿しました")
+    print("=" * 60)
+
 
 if __name__ == "__main__":
     main()
