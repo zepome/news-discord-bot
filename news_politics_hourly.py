@@ -15,7 +15,7 @@ import google.generativeai as genai
 # 環境変数の取得
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_POLITICS')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-POLITICAL_SCORE_THRESHOLD = int(os.environ.get('POLITICAL_SCORE_THRESHOLD', '60'))
+POLITICAL_SCORE_THRESHOLD = int(os.environ.get('POLITICAL_SCORE_THRESHOLD', '70'))
 MAX_NEWS_TO_POST = int(os.environ.get('MAX_NEWS_TO_POST', '3'))
 
 
