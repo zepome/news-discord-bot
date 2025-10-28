@@ -113,14 +113,168 @@ def create_discord_message(news_item, sentiment_analysis=None):
     content += f"⏰ **取得時刻**: {time_str}\n"
     content += f"🔗 {link}\n"
     
-    # 世論分析がある場合（将来の拡張用）
+    # 世論分析がある場合
     if sentiment_analysis:
         content += "\n" + "━━━━━━━━━━━━━━━━━━\n"
-        content += "📊 **世論分析**\n\n"
-        content += sentiment_analysis.get('raw_analysis', '分析結果なし')
+        content += "📊 **世論分析**\n"
+        content += sentiment_analysis.get('formatted_analysis', '分析結果なし')
     
     return {'content': content}
+def search_yahoo_news(title):
+    """
+    Yahoo!ニュースでタイトル検索してURLを取得
+    """
+    try:
+        import urllib.parse
+        search_url = f"https://news.yahoo.co.jp/search?p={urllib.parse.quote(title)}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(search_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # 検索結果の最初のリンクを取得
+        first_result = soup.select_one('a[href*="news.yahoo.co.jp/articles/"]')
+        if first_result:
+            return first_result['href']
+        
+        return None
+    
+    except Exception as e:
+        print(f"  ⚠️ Yahoo!ニュース検索エラー: {e}")
+        return None
 
+
+def get_yahoo_comments(article_url, max_comments=100):
+    """
+    Yahoo!ニュースのコメントを取得
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(article_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        comments = []
+        
+        # Yahoo!ニュースのコメント構造に対応
+        comment_elements = soup.select('.comment')[:max_comments]
+        
+        for elem in comment_elements:
+            text_elem = elem.select_one('.commentText')
+            if text_elem:
+                comment_text = text_elem.get_text(strip=True)
+                if comment_text:
+                    comments.append({'text': comment_text})
+        
+        # コメントが取得できない場合の代替方法
+        if not comments:
+            # 別の構造を試す
+            alt_comments = soup.select('div[class*="comment"]')[:max_comments]
+            for elem in alt_comments:
+                text = elem.get_text(strip=True)
+                if text and len(text) > 10:
+                    comments.append({'text': text})
+        
+        return comments[:max_comments]
+    
+    except Exception as e:
+        print(f"  ⚠️ コメント取得エラー: {e}")
+        return []
+
+
+def analyze_sentiment(comments):
+    """
+    Gemini APIでコメントの感情分析
+    """
+    if not comments or not GEMINI_API_KEY:
+        return None
+    
+    try:
+        # 上位20件のコメントを分析対象にする
+        top_comments = comments[:20]
+        comments_text = "\n".join([f"- {c['text']}" for c in top_comments])
+        
+        prompt = f"""
+以下のYahoo!ニュースコメントを分析してください。
+
+【コメント一覧】
+{comments_text}
+
+以下の形式で回答してください：
+
+感情分布:
+賛成: XX%
+反対: XX%
+中立: XX%
+
+議論の熱量: XX点
+
+主要論点:
+• 論点1
+• 論点2
+"""
+        
+        response = model.generate_content(prompt)
+        analysis_text = response.text.strip()
+        
+        # 感情分布の抽出
+        result = {'raw_text': analysis_text}
+        
+        agree_match = re.search(r'賛成[：:]\s*(\d+)%', analysis_text)
+        oppose_match = re.search(r'反対[：:]\s*(\d+)%', analysis_text)
+        neutral_match = re.search(r'中立[：:]\s*(\d+)%', analysis_text)
+        
+        if agree_match and oppose_match and neutral_match:
+            result['sentiment'] = {
+                'agree': int(agree_match.group(1)),
+                'oppose': int(oppose_match.group(1)),
+                'neutral': int(neutral_match.group(1))
+            }
+        
+        # 熱量スコアの抽出
+        heat_match = re.search(r'(\d+)点', analysis_text)
+        if heat_match:
+            result['heat_score'] = int(heat_match.group(1))
+        
+        # フォーマット化された分析結果を作成
+        formatted = "\n💭 **感情分布**\n"
+        if 'sentiment' in result:
+            s = result['sentiment']
+            formatted += f"   賛成: {s['agree']}% | 反対: {s['oppose']}% | 中立: {s['neutral']}%\n\n"
+        
+        formatted += "🔥 **議論の熱量**: "
+        if 'heat_score' in result:
+            formatted += f"{result['heat_score']}点\n\n"
+        else:
+            formatted += "不明\n\n"
+        
+        # 主要論点の抽出
+        formatted += "📌 **主要論点**\n"
+        points = re.findall(r'[•・]\s*(.+)', analysis_text)
+        if points:
+            for point in points[:3]:  # 最大3つ
+                formatted += f"   • {point.strip()}\n"
+        else:
+            formatted += "   • 分析データ不足\n"
+        
+        result['formatted_analysis'] = formatted
+        
+        return result
+    
+    except Exception as e:
+        print(f"  ⚠️ 感情分析エラー: {e}")
+        return None
+        
 def main():
     print("=" * 60)
     print("🏛️ 政治ニュース自動収集Bot")
@@ -199,17 +353,37 @@ def main():
     
     posted = 0
     for news in political_news[:MAX_NEWS_TO_POST]:
-        # メッセージ作成（改良版フォーマット）
-        message = create_discord_message(news)
+        print(f"\n処理中: {news['title']}")
+        
+        # Yahoo!ニュース検索
+        sentiment_analysis = None
+        yahoo_url = search_yahoo_news(news['title'])
+        
+        if yahoo_url:
+            print(f"  ✅ Yahoo!ニュース発見: {yahoo_url}")
+            comments = get_yahoo_comments(yahoo_url, max_comments=100)
+            
+            if comments:
+                print(f"  ✅ コメント取得: {len(comments)}件")
+                sentiment_analysis = analyze_sentiment(comments)
+                if sentiment_analysis:
+                    print(f"  ✅ 感情分析完了")
+                time.sleep(1)  # API制限対策
+            else:
+                print(f"  ⚠️ コメント取得失敗")
+        else:
+            print(f"  ⚠️ Yahoo!ニュースが見つかりませんでした")
+        
+        # メッセージ作成（世論分析付き）
+        message = create_discord_message(news, sentiment_analysis)
         
         try:
             requests.post(DISCORD_WEBHOOK_URL, json=message, timeout=10)
-
             posted += 1
-            print(f"✅ Discord投稿: {news['title']}")
+            print(f"  ✅ Discord投稿成功")
             time.sleep(2)
         except Exception as e:
-            print(f"❌ 投稿エラー: {e}")
+            print(f"  ❌ 投稿エラー: {e}")
     
     print(f"\n✅ 完了: {posted}件を投稿しました")
 
