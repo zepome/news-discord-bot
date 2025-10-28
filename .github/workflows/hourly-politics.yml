@@ -2,8 +2,8 @@ name: Hourly Political News
 
 on:
   schedule:
-    # 朝6時〜夜10時の間、1時間ごと
-    - cron: '0 6-22 * * *'  # 17回/日
+    - cron: '0 21-23 * * *'  # UTC 21:00-23:00 = JST 6:00-8:00
+    - cron: '0 0-13 * * *'   # UTC 0:00-13:00 = JST 9:00-22:00
   workflow_dispatch:
 
 jobs:
