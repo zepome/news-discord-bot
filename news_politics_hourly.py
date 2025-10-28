@@ -401,16 +401,30 @@ def main():
         print(f"📡 {source_name} から取得中...")
         try:
             feed = feedparser.parse(feed_url)
+            
+            # デバッグ情報を追加
+            print(f"  📊 フィード情報: status={getattr(feed, 'status', 'N/A')}, version={getattr(feed, 'version', 'N/A')}")
+            print(f"  📊 エントリ数: {len(feed.entries)}")
+            
+            # エラーチェック
+            if hasattr(feed, 'bozo') and feed.bozo:
+                print(f"  ⚠️ フィード解析エラー: {feed.bozo_exception}")
+            
             for entry in feed.entries[:20]:  # 各ソース最大20件
-                all_entries.append({
-                    'title': entry.get('title', ''),
-                    'description': entry.get('description', ''),
-                    'link': entry.get('link', ''),
-                    'source': source_name
-                })
+                title = entry.get('title', '')
+                description = entry.get('description', '') or entry.get('summary', '')
+                
+                if title:  # タイトルがある場合のみ追加
+                    all_entries.append({
+                        'title': title,
+                        'description': description,
+                        'link': entry.get('link', ''),
+                        'source': source_name
+                    })
             print(f"  ✅ {len(feed.entries[:20])}件取得")
         except Exception as e:
-            print(f"  ❌ エラー: {e}")
+            print(f"  ❌ エラー: {type(e).__name__}: {e}")
+
     
     print(f"\n合計: {len(all_entries)}件のニュースを取得")
     
