@@ -25,16 +25,7 @@ jobs:
         pip uninstall -y openai
         pip install --no-cache-dir --force-reinstall -r requirements.txt
         
-    - name: インストール確認（デバッグ）
-      run: |
-        echo "=== インストール済みパッケージ ==="
-        pip list | grep google
-        echo "=== Gemini APIバージョン確認 ==="
-        python -c "import google.generativeai as genai; print('Version:', genai.__version__)"
-        echo "=== 利用可能なモデル確認 ==="
-        python -c "import google.generativeai as genai; import os; genai.configure(api_key=os.environ['GEMINI_API_KEY']); models = genai.list_models(); print([m.name for m in models if 'generateContent' in m.supported_generation_methods])"
-      env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
         
     - name: 政治ニュース取得・フィルタ・投稿
       env:
