@@ -43,15 +43,8 @@ EXCLUDE_KEYWORDS = [
 # RSSフィード
 NEWS_FEEDS = {
     '日経新聞・速報': 'https://assets.wor.jp/rss/rdf/nikkei/news.rdf',
-    '日経新聞・政治経済': 'https://assets.wor.jp/rss/rdf/nikkei/economy.rdf',
-    '47NEWS・地域速報': 'https://assets.wor.jp/rss/rdf/ynlocalnews/news.rdf',
-    'Bloomberg・トップ': 'https://assets.wor.jp/rss/rdf/bloomberg/top.rdf',
-    'Yahoo!ニュース': 'https://news.yahoo.co.jp/rss/topics/top-picks.xml',
-    '時事ドットコム': 'https://www.jiji.com/rss/ranking.rdf',
     'ロイター日本語': 'https://jp.reuters.com/rssFeed/topNews',
-    '共同通信': 'https://www.47news.jp/rss/national.xml',
-    'BBC News Japan': 'https://feeds.bbci.co.uk/news/world/asia/rss.xml',
-    'CNN Top Stories': 'http://rss.cnn.com/rss/edition_world.rss'
+    'Yahoo!ニュース': 'https://news.yahoo.co.jp/rss/topics/top-picks.xml'
 }
 
 def check_political_relevance(title, description):
