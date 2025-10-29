@@ -24,8 +24,18 @@ jobs:
         pip install --upgrade pip
         pip uninstall -y openai
         pip install --no-cache-dir --force-reinstall -r requirements.txt
-        
-
+    
+    # ========== 🆕 追加: 履歴ファイルの復元 ==========
+    - name: 履歴ファイルを復元
+      continue-on-error: true
+      run: |
+        if [ -f posted_news_history.json ]; then
+          echo "📚 既存の履歴ファイルを発見"
+          cat posted_news_history.json | head -n 5
+        else
+          echo "📝 履歴ファイルが存在しないため、新規作成します"
+          echo "{}" > posted_news_history.json
+        fi
         
     - name: 政治ニュース取得・フィルタ・投稿
       env:
@@ -35,3 +45,27 @@ jobs:
         MAX_NEWS_TO_POST: 5
       run: |
         python news_politics_hourly.py
+    
+    # ========== 🆕 追加: 履歴ファイルの保存 ==========
+    - name: 履歴ファイルをコミット
+      if: always()  # 実行が成功・失敗どちらでも保存
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        
+        # 履歴ファイルが存在するか確認
+        if [ -f posted_news_history.json ]; then
+          echo "📚 履歴ファイルを保存中..."
+          git add posted_news_history.json
+          
+          # 変更があるか確認してからコミット
+          if git diff --cached --quiet; then
+            echo "✅ 履歴に変更なし"
+          else
+            git commit -m "Update news history [skip ci]"
+            git push
+            echo "✅ 履歴ファイルを保存しました"
+          fi
+        else
+          echo "⚠️ 履歴ファイルが見つかりません"
+        fi
