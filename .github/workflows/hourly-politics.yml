@@ -6,6 +6,10 @@ on:
     - cron: '0 0-13 * * *'   # UTC 0:00-13:00 = JST 9:00-22:00
   workflow_dispatch:
 
+# Gitへの書き込み権限
+permissions:
+  contents: write
+
 jobs:
   fetch-and-filter-politics:
     runs-on: ubuntu-latest
@@ -25,7 +29,6 @@ jobs:
         pip uninstall -y openai
         pip install --no-cache-dir --force-reinstall -r requirements.txt
     
-    # ========== 🆕 追加: 履歴ファイルの復元 ==========
     - name: 履歴ファイルを復元
       continue-on-error: true
       run: |
@@ -46,19 +49,16 @@ jobs:
       run: |
         python news_politics_hourly.py
     
-    # ========== 🆕 追加: 履歴ファイルの保存 ==========
     - name: 履歴ファイルをコミット
-      if: always()  # 実行が成功・失敗どちらでも保存
+      if: always()
       run: |
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         
-        # 履歴ファイルが存在するか確認
         if [ -f posted_news_history.json ]; then
           echo "📚 履歴ファイルを保存中..."
           git add posted_news_history.json
           
-          # 変更があるか確認してからコミット
           if git diff --cached --quiet; then
             echo "✅ 履歴に変更なし"
           else
