@@ -49,7 +49,7 @@ EXCLUDE_KEYWORDS = [
 # RSSフィード
 NEWS_FEEDS = {
     '日経新聞・速報': 'https://assets.wor.jp/rss/rdf/nikkei/news.rdf',
-    'ロイター日本語': 'https://jp.reuters.com/rssFeed/topNews',
+    'ロイター通信・速報': 'https://assets.wor.jp/rss/rdf/reuters/top.rdf',
     'Yahoo!ニュース': 'https://news.yahoo.co.jp/rss/topics/top-picks.xml'
 }
 
