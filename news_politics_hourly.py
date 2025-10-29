@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-政治ニュース自動収集Bot（基本版）
+政治ニュース自動収集Bot（AIコメント付き重複防止版）
 """
 
 import os
 import sys
 import re
 import time
-from datetime import datetime
+import json
+import hashlib
+from datetime import datetime, timedelta
+from pathlib import Path
 import feedparser
 import requests
 import google.generativeai as genai
@@ -18,11 +21,14 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 POLITICAL_SCORE_THRESHOLD = int(os.environ.get('POLITICAL_SCORE_THRESHOLD', '70'))
 MAX_NEWS_TO_POST = int(os.environ.get('MAX_NEWS_TO_POST', '3'))
 
+# 投稿履歴ファイルのパス
+HISTORY_FILE = 'posted_news_history.json'
+HISTORY_RETENTION_HOURS = 24  # 24時間以内の重複をチェック
 
 # Gemini API設定
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
 # 政治関連キーワード
 POLITICAL_KEYWORDS = [
@@ -47,6 +53,74 @@ NEWS_FEEDS = {
     'Yahoo!ニュース': 'https://news.yahoo.co.jp/rss/topics/top-picks.xml'
 }
 
+def generate_news_hash(title, link):
+    """
+    ニュースの一意な識別子を生成（タイトル + URLのハッシュ値）
+    """
+    # タイトルを正規化（空白を統一、記号を削除）
+    normalized_title = re.sub(r'\s+', ' ', title.strip())
+    normalized_title = re.sub(r'[【】『』「」\[\]()（）]', '', normalized_title)
+    
+    # URLとタイトルを組み合わせてハッシュ化
+    content = f"{normalized_title}|{link}"
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+def load_posted_history():
+    """
+    過去の投稿履歴を読み込む
+    """
+    if not os.path.exists(HISTORY_FILE):
+        return {}
+    
+    try:
+        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+            history = json.load(f)
+        
+        # 古い履歴を削除（24時間以上前）
+        cutoff_time = datetime.now() - timedelta(hours=HISTORY_RETENTION_HOURS)
+        cutoff_timestamp = cutoff_time.timestamp()
+        
+        cleaned_history = {
+            hash_id: timestamp 
+            for hash_id, timestamp in history.items() 
+            if timestamp > cutoff_timestamp
+        }
+        
+        # クリーンアップした履歴を保存
+        if len(cleaned_history) < len(history):
+            save_posted_history(cleaned_history)
+            print(f"📝 履歴クリーンアップ: {len(history)} → {len(cleaned_history)}件")
+        
+        return cleaned_history
+    
+    except Exception as e:
+        print(f"⚠️ 履歴読み込みエラー: {e}")
+        return {}
+
+def save_posted_history(history):
+    """
+    投稿履歴を保存
+    """
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ 履歴保存エラー: {e}")
+
+def is_duplicate(title, link, posted_history):
+    """
+    重複チェック
+    """
+    news_hash = generate_news_hash(title, link)
+    return news_hash in posted_history
+
+def mark_as_posted(title, link, posted_history):
+    """
+    投稿済みとしてマーク
+    """
+    news_hash = generate_news_hash(title, link)
+    posted_history[news_hash] = datetime.now().timestamp()
+
 def check_political_relevance(title, description):
     """政治関連度を判定（Gemini API）"""
     if not GEMINI_API_KEY:
@@ -70,9 +144,49 @@ def check_political_relevance(title, description):
         print(f"⚠️ Gemini APIエラー: {e}")
         return 0
 
-def create_discord_message(news_item, sentiment_analysis=None):
+def generate_ai_comment(title, description):
     """
-    Discord投稿用のメッセージを作成（改良版）
+    AIコメントを生成：記事から日本・世界の動向を予測
+    """
+    if not GEMINI_API_KEY:
+        return None
+    
+    try:
+        prompt = f"""
+以下の政治ニュースを分析し、この出来事が今後の日本や世界にどのような影響を及ぼすか予測してください。
+
+【ニュース】
+タイトル: {title}
+内容: {description}
+
+以下の形式で簡潔に回答してください（各項目2-3行程度）：
+
+🇯🇵 日本への影響:
+（日本の政治・経済・社会への具体的な影響を予測）
+
+🌏 世界への影響:
+（国際関係や世界情勢への影響を予測）
+
+📊 注目ポイント:
+（今後注視すべき点や展開の可能性）
+"""
+        
+        response = model.generate_content(prompt)
+        ai_comment = response.text.strip()
+        
+        # コメントが取得できたか確認
+        if ai_comment and len(ai_comment) > 20:
+            return ai_comment
+        else:
+            return None
+    
+    except Exception as e:
+        print(f"  ⚠️ AIコメント生成エラー: {e}")
+        return None
+
+def create_discord_message(news_item, ai_comment=None):
+    """
+    Discord投稿用のメッセージを作成（AIコメント付き）
     """
     from datetime import datetime, timezone, timedelta
     
@@ -106,171 +220,18 @@ def create_discord_message(news_item, sentiment_analysis=None):
     content += f"⏰ **取得時刻**: {time_str}\n"
     content += f"🔗 {link}\n"
     
-    # 世論分析がある場合
-    if sentiment_analysis:
+    # AIコメントがある場合
+    if ai_comment:
         content += "\n" + "━━━━━━━━━━━━━━━━━━\n"
-        content += "📊 **世論分析**\n"
-        content += sentiment_analysis.get('formatted_analysis', '分析結果なし')
+        content += "🤖 **AIによる動向予測**\n\n"
+        content += ai_comment
+        content += "\n"
     
     return {'content': content}
-def search_yahoo_news(title):
-    """
-    Yahoo!ニュースでタイトル検索してURLを取得
-    """
-    try:
-        import urllib.parse
-        search_url = f"https://news.yahoo.co.jp/search?p={urllib.parse.quote(title)}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # 検索結果の最初のリンクを取得
-        first_result = soup.select_one('a[href*="news.yahoo.co.jp/articles/"]')
-        if first_result:
-            return first_result['href']
-        
-        return None
-    
-    except Exception as e:
-        print(f"  ⚠️ Yahoo!ニュース検索エラー: {e}")
-        return None
 
-
-def get_yahoo_comments(article_url, max_comments=100):
-    """
-    Yahoo!ニュースのコメントを取得
-    """
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        response = requests.get(article_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        comments = []
-        
-        # Yahoo!ニュースのコメント構造に対応
-        comment_elements = soup.select('.comment')[:max_comments]
-        
-        for elem in comment_elements:
-            text_elem = elem.select_one('.commentText')
-            if text_elem:
-                comment_text = text_elem.get_text(strip=True)
-                if comment_text:
-                    comments.append({'text': comment_text})
-        
-        # コメントが取得できない場合の代替方法
-        if not comments:
-            # 別の構造を試す
-            alt_comments = soup.select('div[class*="comment"]')[:max_comments]
-            for elem in alt_comments:
-                text = elem.get_text(strip=True)
-                if text and len(text) > 10:
-                    comments.append({'text': text})
-        
-        return comments[:max_comments]
-    
-    except Exception as e:
-        print(f"  ⚠️ コメント取得エラー: {e}")
-        return []
-
-
-def analyze_sentiment(comments):
-    """
-    Gemini APIでコメントの感情分析
-    """
-    if not comments or not GEMINI_API_KEY:
-        return None
-    
-    try:
-        # 上位20件のコメントを分析対象にする
-        top_comments = comments[:20]
-        comments_text = "\n".join([f"- {c['text']}" for c in top_comments])
-        
-        prompt = f"""
-以下のYahoo!ニュースコメントを分析してください。
-
-【コメント一覧】
-{comments_text}
-
-以下の形式で回答してください：
-
-感情分布:
-賛成: XX%
-反対: XX%
-中立: XX%
-
-議論の熱量: XX点
-
-主要論点:
-• 論点1
-• 論点2
-"""
-        
-        response = model.generate_content(prompt)
-        analysis_text = response.text.strip()
-        
-        # 感情分布の抽出
-        result = {'raw_text': analysis_text}
-        
-        agree_match = re.search(r'賛成[：:]\s*(\d+)%', analysis_text)
-        oppose_match = re.search(r'反対[：:]\s*(\d+)%', analysis_text)
-        neutral_match = re.search(r'中立[：:]\s*(\d+)%', analysis_text)
-        
-        if agree_match and oppose_match and neutral_match:
-            result['sentiment'] = {
-                'agree': int(agree_match.group(1)),
-                'oppose': int(oppose_match.group(1)),
-                'neutral': int(neutral_match.group(1))
-            }
-        
-        # 熱量スコアの抽出
-        heat_match = re.search(r'(\d+)点', analysis_text)
-        if heat_match:
-            result['heat_score'] = int(heat_match.group(1))
-        
-        # フォーマット化された分析結果を作成
-        formatted = "\n💭 **感情分布**\n"
-        if 'sentiment' in result:
-            s = result['sentiment']
-            formatted += f"   賛成: {s['agree']}% | 反対: {s['oppose']}% | 中立: {s['neutral']}%\n\n"
-        
-        formatted += "🔥 **議論の熱量**: "
-        if 'heat_score' in result:
-            formatted += f"{result['heat_score']}点\n\n"
-        else:
-            formatted += "不明\n\n"
-        
-        # 主要論点の抽出
-        formatted += "📌 **主要論点**\n"
-        points = re.findall(r'[•・]\s*(.+)', analysis_text)
-        if points:
-            for point in points[:3]:  # 最大3つ
-                formatted += f"   • {point.strip()}\n"
-        else:
-            formatted += "   • 分析データ不足\n"
-        
-        result['formatted_analysis'] = formatted
-        
-        return result
-    
-    except Exception as e:
-        print(f"  ⚠️ 感情分析エラー: {e}")
-        return None
-        
 def main():
     print("=" * 60)
-    print("🏛️ 政治ニュース自動収集Bot")
+    print("🏛️ 政治ニュース自動収集Bot（AIコメント付き）")
     print("=" * 60)
     print(f"実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
@@ -281,6 +242,10 @@ def main():
     if not GEMINI_API_KEY:
         print("❌ GEMINI_API_KEY が設定されていません")
         sys.exit(1)
+    
+    # 投稿履歴の読み込み
+    posted_history = load_posted_history()
+    print(f"📚 投稿履歴: {len(posted_history)}件\n")
     
     # ニュース取得
     all_entries = []
@@ -297,12 +262,13 @@ def main():
             for entry in feed.entries[:20]:
                 title = entry.get('title', '')
                 description = entry.get('description', '') or entry.get('summary', '')
+                link = entry.get('link', '')
                 
-                if title:
+                if title and link:
                     all_entries.append({
                         'title': title,
                         'description': description,
-                        'link': entry.get('link', ''),
+                        'link': link,
                         'source': source_name
                     })
             print(f"  ✅ {len(feed.entries[:20])}件取得")
@@ -311,9 +277,21 @@ def main():
     
     print(f"\n合計: {len(all_entries)}件のニュースを取得")
     
+    # 重複チェック
+    new_entries = []
+    duplicate_count = 0
+    for entry in all_entries:
+        if is_duplicate(entry['title'], entry['link'], posted_history):
+            duplicate_count += 1
+            print(f"  ⏩ スキップ（重複）: {entry['title'][:40]}...")
+        else:
+            new_entries.append(entry)
+    
+    print(f"🔍 重複チェック: {duplicate_count}件スキップ, {len(new_entries)}件が新規")
+    
     # キーワードフィルタリング
     keyword_matched = []
-    for entry in all_entries:
+    for entry in new_entries:
         combined = f"{entry['title']} {entry['description']}"
         if any(kw in combined for kw in POLITICAL_KEYWORDS):
             if not any(ex in combined for ex in EXCLUDE_KEYWORDS):
@@ -339,46 +317,44 @@ def main():
     
     # Discord投稿
     if not political_news:
-        message = {'content': '📭 政治関連ニュースはありませんでした'}
-        requests.post(DISCORD_WEBHOOK_URL, json=message)
-        print("\n政治関連ニュースが見つかりませんでした")
+        print("\n📭 投稿するニュースがありません")
         return
     
     posted = 0
     for news in political_news[:MAX_NEWS_TO_POST]:
-        print(f"\n処理中: {news['title']}")
+        print(f"\n━━━━━━━━━━━━━━━━━━")
+        print(f"処理中: {news['title']}")
         
-        # Yahoo!ニュース検索
-        sentiment_analysis = None
-        yahoo_url = search_yahoo_news(news['title'])
+        # AIコメント生成
+        ai_comment = generate_ai_comment(news['title'], news['description'])
         
-        if yahoo_url:
-            print(f"  ✅ Yahoo!ニュース発見: {yahoo_url}")
-            comments = get_yahoo_comments(yahoo_url, max_comments=100)
-            
-            if comments:
-                print(f"  ✅ コメント取得: {len(comments)}件")
-                sentiment_analysis = analyze_sentiment(comments)
-                if sentiment_analysis:
-                    print(f"  ✅ 感情分析完了")
-                time.sleep(1)  # API制限対策
-            else:
-                print(f"  ⚠️ コメント取得失敗")
+        if ai_comment:
+            print(f"  ✅ AIコメント生成完了")
         else:
-            print(f"  ⚠️ Yahoo!ニュースが見つかりませんでした")
+            print(f"  ⚠️ AIコメント生成失敗")
         
-        # メッセージ作成（世論分析付き）
-        message = create_discord_message(news, sentiment_analysis)
+        time.sleep(1)  # API制限対策
+        
+        # メッセージ作成（AIコメント付き）
+        message = create_discord_message(news, ai_comment)
         
         try:
             requests.post(DISCORD_WEBHOOK_URL, json=message, timeout=10)
+            
+            # 投稿成功したら履歴に追加
+            mark_as_posted(news['title'], news['link'], posted_history)
             posted += 1
             print(f"  ✅ Discord投稿成功")
             time.sleep(2)
         except Exception as e:
             print(f"  ❌ 投稿エラー: {e}")
     
-    print(f"\n✅ 完了: {posted}件を投稿しました")
+    # 履歴を保存
+    save_posted_history(posted_history)
+    
+    print(f"\n━━━━━━━━━━━━━━━━━━")
+    print(f"✅ 完了: {posted}件を投稿しました")
+    print(f"📚 現在の履歴件数: {len(posted_history)}件")
 
 if __name__ == "__main__":
     main()
