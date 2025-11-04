@@ -6,7 +6,7 @@ on:
     - cron: '0 0-13 * * *'   # UTC 0:00-13:00 = JST 9:00-22:00
   workflow_dispatch:
 
-# Gitへの書き込み権限
+# Gitへの書き込み権限 (履歴ファイル保存用)
 permissions:
   contents: write
 
@@ -26,7 +26,7 @@ jobs:
     - name: 依存パッケージインストール
       run: |
         pip install --upgrade pip
-        pip uninstall -y openai
+        # 依存パッケージ (pydrive2 が含まれる requirements.txt) をインストール
         pip install --no-cache-dir --force-reinstall -r requirements.txt
     
     - name: 履歴ファイルを復元
@@ -40,10 +40,20 @@ jobs:
           echo "{}" > posted_news_history.json
         fi
         
-    - name: 政治ニュース取得・フィルタ・投稿
+    - name: 政治ニュース取得・フィルタ・投稿 (Drive連携を有効化)
       env:
         DISCORD_WEBHOOK_POLITICS: ${{ secrets.DISCORD_WEBHOOK_POLITICS }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        
+        # ▼ Google Drive 連携用の環境変数 ▼
+        # ステップ3で設定したJSON認証情報
+        GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}
+        # ステップ2で作成/権限付与したフォルダ名
+        DRIVE_FOLDER_NAME: GitHub Political News Logs
+        # ログとして記録するファイル名
+        LOG_FILE_NAME: political_news_summary.txt
+        # ▲ Google Drive 連携用の環境変数 ▲
+        
         POLITICAL_SCORE_THRESHOLD: 70
         MAX_NEWS_TO_POST: 5
       run: |
