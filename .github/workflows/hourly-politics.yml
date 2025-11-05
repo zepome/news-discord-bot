@@ -26,8 +26,10 @@ jobs:
     - name: 依存パッケージインストール
       run: |
         pip install --upgrade pip
-        # 依存パッケージ (pydrive2 が含まれる requirements.txt) をインストール
-        pip install --no-cache-dir --force-reinstall -r requirements.txt
+        # 既存の google-generativeai をアンインストールし、確実に最新版をインストール
+        pip uninstall -y google-generativeai || echo "google-generativeai not installed, skipping uninstall."
+        # pipのキャッシュを無視し、強制的に再インストール
+        pip install --no-cache-dir --force-reinstall -r requirements.txt 
     
     - name: 履歴ファイルを復元
       continue-on-error: true
@@ -46,11 +48,8 @@ jobs:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         
         # ▼ Google Drive 連携用の環境変数 ▼
-        # ステップ3で設定したJSON認証情報
         GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}
-        # ステップ2で作成/権限付与したフォルダ名
         DRIVE_FOLDER_NAME: GitHub Political News Logs
-        # ログとして記録するファイル名
         LOG_FILE_NAME: political_news_summary.txt
         # ▲ Google Drive 連携用の環境変数 ▲
         
