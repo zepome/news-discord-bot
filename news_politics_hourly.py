@@ -41,17 +41,18 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
-# 互換性チェック: GenerateContentConfig のインポートを試みる (このブロックが追加・修正されました)
+# 互換性チェック: JSON強制出力はMarkdown形式に戻すため使用しませんが、
+# 既存のコード構造を残すため、フラグだけ保持します。
+# ⚠️ 今回、JSON形式の出力は使用しないため、このブロックは実質的に影響を与えません。
 try:
     from google.generativeai.types import GenerateContentConfig
     GEMINI_CONFIG_AVAILABLE = True
 except ImportError:
-    # 古いSDKの場合
     GEMINI_CONFIG_AVAILABLE = False
-    print("⚠️ GenerateContentConfig が見つかりません。JSON形式での強制出力をスキップします。")
+    print("⚠️ GenerateContentConfig はMarkdown出力のため使用しません。")
 
 
-# 政治関連キーワード
+# 政治関連キーワード (省略なし)
 POLITICAL_KEYWORDS = [
     '自民', '国民民主', '参政', '維新', '立憲', '共産', '公明', '社民',
     '高市', '麻生', '片山', '小野田', '茂木', '鈴木俊一', '岸田', '河野', '石破',
@@ -61,12 +62,14 @@ POLITICAL_KEYWORDS = [
     '規制改革', 'デジタル庁', 'マイナ', 'エネルギー', '原発', '環境', 'GX'
 ]
 
-# RSSフィード設定
+# RSSフィード設定 (省略なし)
 NEWS_FEEDS = {
     '日経新聞': 'https://www.nikkei.com/rss/001.xml',
     'ロイター通信': 'https://jp.reuters.com/rssFeed/topNews',
     'Yahoo!ニュース': 'https://news.yahoo.co.jp/rss/topics/top-picks.xml'
 }
+
+# (load_posted_history, save_posted_history, is_posted, mark_as_posted, fetch_news, filter_by_keywords は変更なし)
 
 def load_posted_history():
     """投稿履歴を読み込む"""
@@ -129,7 +132,7 @@ def filter_by_keywords(entries):
     return filtered
 
 def score_and_filter_with_ai(entries):
-    """Geminiで政治関連度をスコアリングし、動向予測コメントを生成"""
+    """Geminiで政治関連度をスコアリングし、動向予測コメントを生成 (Markdown出力に変更)"""
     if not GEMINI_API_KEY:
         print("❌ Gemini APIキーが設定されていません。AIスコアリングをスキップします。")
         for entry in entries:
@@ -138,46 +141,44 @@ def score_and_filter_with_ai(entries):
     
     scored_news = []
     
-    # プロンプトのテンプレート
+    # プロンプトのテンプレートをMarkdown形式に変更
     prompt_template = """
-    あなたは日本の政治動向を分析する専門家です。提供されたニュース記事に対し、以下の2つの指示に従い、正確にJSON形式で出力してください。
-    1. **政治関連度判定**: 記事の内容が日本の政治にどれだけ重要か、**0（全く無関係）から100（極めて重要）**の間の整数でスコアリングしてください。
-    2. **動向予測**: 記事の内容が日本や世界に与える短期・長期的な影響、または次に注目すべき政治的ポイントを**100文字以内**で簡潔に分析し、コメントとして提供してください。
-    スコアが70未満の場合は動向予測は空文字列にしてください。出力はJSON形式のみとし、余分な説明やマークダウンは付けないでください。
+    あなたは日本の政治動向を分析する専門家です。以下のニュース記事を分析し、**全て日本語**で以下の形式で出力してください。
 
-    例：{{"score": 85, "comment": "〇〇法案の可決により、次期選挙での与党の戦略が大きく変わる可能性がある。"}}
+    【ニュース】
+    タイトル: {title}
+    ニュース概要: {description}
+
+    **重要**: 回答はこの形式のみとし、他の説明文、マークダウン（例: ```json）や余分な文字は付けないでください。
+
+    ---
+    🎯 **関連度**: [0〜100点の数字]点
+    ━━━━━━━━━━━━━━━━━━
+    **🇯🇵 日本への影響:**
+    - （日本の政治・経済・社会への具体的な影響を予測。箇条書き）
+    **🌏 世界への影響:**
+    - （国際関係や世界情勢への影響を予測。箇条書き）
+    **📊 注目ポイント:**
+    - （今後注視すべき点や展開の可能性。箇条書き）
     """
 
     for entry in entries:
         title = entry.get('title', '不明')
         description = entry.get('summary', '概要なし')
         
-        user_prompt = f"{prompt_template}\n\n【分析対象ニュース】\nタイトル: {title}\nニュース概要: {description}"
+        user_prompt = prompt_template.format(title=title, description=description)
         
         try:
-            # 互換性がある場合 (GenerateContentConfig が使える場合)
-            if GEMINI_CONFIG_AVAILABLE:
-                response = model.generate_content(
-                    user_prompt,
-                    config=GenerateContentConfig(
-                        system_instruction="あなたは優秀なJSON生成エキスパートです。",
-                        response_mime_type="application/json"
-                    )
-                )
-            # 互換性がない場合 (古いSDKの場合、configなしで実行)
-            else:
-                response = model.generate_content(user_prompt)
-            
-            # JSONレスポンスのパース (レスポンスがJSON形式であることを期待)
+            # configなしで実行 (Markdown形式の文字列を期待)
+            response = model.generate_content(user_prompt)
             response_text = response.text.strip()
-            # 応急処置として、```json ... ``` のマークダウンを除去
-            if response_text.startswith('```json'):
-                response_text = response_text.strip('` \n').replace('json', '', 1).strip()
             
-            # JSONデコードを試みる
-            ai_data = json.loads(response_text)
-            score = ai_data.get('score', 0)
-            ai_comment = ai_data.get('comment', '')
+            # 1. スコアを抽出
+            score_match = re.search(r'🎯 \*\*関連度\*\*: (\d+)点', response_text)
+            score = int(score_match.group(1)) if score_match else 0
+            
+            # 2. AIコメント（Markdown全文）を保存
+            ai_comment = response_text
             
             entry['score'] = score
             entry['ai_comment'] = ai_comment
@@ -186,47 +187,54 @@ def score_and_filter_with_ai(entries):
             # エラー時にログを出力
             print(f"  ⚠️ Gemini APIエラー発生（スコアリング）: {e}")
             entry['score'] = 0 
-            entry['ai_comment'] = 'AIコメント生成に失敗しました。'
+            entry['ai_comment'] = 'AIコメント生成とスコアリングに失敗しました。'
         
         scored_news.append(entry)
         
-        time.sleep(1) # API制限対策
+        time.sleep(2) # ⚠️ APIレート制限回避のため、待ち時間を2秒に増加
         
     return scored_news
 
 def generate_ai_comment(title, description):
-    """Discord投稿用のAIコメントを生成 (旧関数を流用)"""
+    """Discord投稿用のAIコメントを生成 (未使用)"""
     if not GEMINI_API_KEY:
         return ""
-    
-    # score_and_filter_with_aiで既にコメントを取得済み
     return ""
 
 
 def create_discord_message(news, ai_comment):
-    """Discord投稿メッセージを作成"""
+    """Discord投稿メッセージを作成 (Markdown形式に戻す)"""
     score = news.get('score', 0)
     title = news.get('title', 'タイトル不明')
     link = news.get('link', '#')
+    source = news.get('source', '不明')
     
-    message = {
-        "embeds": [
-            {
-                "title": f"🏛️ 【政治】{title}",
-                "url": link,
-                "description": f"**🎯 政治関連度: {score}点**\n"
-                               f"**🤖 AIによる動向予測:**\n"
-                               f"{ai_comment}\n\n"
-                               f"[記事を読む]({link})",
-                "color": 3447003, # Discordのカラーコード (青)
-                "timestamp": datetime.now().isoformat()
-            }
-        ]
-    }
-    return message
+    # スコアに応じた星評価 (元の形式に合わせる)
+    if score >= 90:
+        stars = '⭐⭐⭐⭐⭐'
+    elif score >= 80:
+        stars = '⭐⭐⭐⭐'
+    elif score >= 70:
+        stars = '⭐⭐⭐'
+    elif score >= 60:
+        stars = '⭐⭐'
+    else:
+        stars = '⭐'
+    
+    # メッセージ作成
+    content = f"🏛️ **[出典: {source}] {title}**\n"
+    content += f"━━━━━━━━━━━━━━━━━━\n"
+    content += f"🎯 **関連度**: {score}点 {stars}\n"
+    content += f"🔗 {link}\n"
+    
+    # AIコメントを追記
+    content += f"\n━━━━━━━━━━━━━━━━━━\n🤖 **AIによる動向予測**\n\n{ai_comment}"
+    
+    # Embedを使わず、contentのみを返す
+    return {'content': content}
 
 # --------------------------------------------------------------------------------
-# --- Google Drive 連携関数 (新規追加) ---
+# --- Google Drive 連携関数 (変更なし) ---
 # --------------------------------------------------------------------------------
 
 def authenticate_google_drive():
@@ -334,11 +342,10 @@ def append_to_drive_log(drive, news_list, drive_folder_name, log_file_name):
             
             # AIコメントも含める
             if news.get('ai_comment'):
-                # 改行を考慮し、AIコメントを整形して追記
-                comment_lines = news['ai_comment'].strip().split('\n')
-                formatted_comment = '\n'.join([f"  > {line}" for line in comment_lines if line.strip()])
+                # Markdown形式のコメントをそのまま追記
                 append_content += "\n🤖 AIによる動向予測:\n"
-                append_content += f"{formatted_comment}\n"
+                # AIコメントの整形を解除し、そのままログに書き込む（Markdownがそのまま残る）
+                append_content += news['ai_comment'] + "\n"
             
             append_content += "-" * 80 + "\n"
             
@@ -352,7 +359,7 @@ def append_to_drive_log(drive, news_list, drive_folder_name, log_file_name):
         print(f"❌ Google Drive追記処理中にエラー: {e}")
 
 # --------------------------------------------------------------------------------
-# --- メイン処理 ---
+# --- メイン処理 (変更なし) ---
 # --------------------------------------------------------------------------------
 
 def main():
@@ -426,7 +433,7 @@ def main():
         if ai_comment:
             print(f"  ✅ AIコメント: {ai_comment[:30]}...")
         
-        time.sleep(1)  # API制限対策
+        time.sleep(2)  # ⚠️ API制限対策のため、2秒に増加
         
         # メッセージ作成（AIコメント付き）
         message = create_discord_message(news, ai_comment)
@@ -439,7 +446,7 @@ def main():
             posted += 1
             posted_news_items.append(news) # 投稿成功したニュースをリストに追加
             print(f"  ✅ Discord投稿成功")
-            time.sleep(2)
+            time.sleep(3) # ⚠️ Discord APIのレート制限回避のため、3秒に増加
         except Exception as e:
             print(f"  ❌ Discord投稿エラー: {e}")
             time.sleep(1)
