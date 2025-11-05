@@ -41,6 +41,16 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
+# 互換性チェック: GenerateContentConfig のインポートを試みる (このブロックが追加・修正されました)
+try:
+    from google.generativeai.types import GenerateContentConfig
+    GEMINI_CONFIG_AVAILABLE = True
+except ImportError:
+    # 古いSDKの場合
+    GEMINI_CONFIG_AVAILABLE = False
+    print("⚠️ GenerateContentConfig が見つかりません。JSON形式での強制出力をスキップします。")
+
+
 # 政治関連キーワード
 POLITICAL_KEYWORDS = [
     '自民', '国民民主', '参政', '維新', '立憲', '共産', '公明', '社民',
@@ -129,30 +139,43 @@ def score_and_filter_with_ai(entries):
     scored_news = []
     
     # プロンプトのテンプレート
-    system_instruction = (
-        "あなたは日本の政治動向を分析する専門家です。提供されたニュース記事に対し、以下の2つの指示に従い、正確にJSON形式で出力してください。"
-        "1. **政治関連度判定**: 記事の内容が日本の政治にどれだけ重要か、**0（全く無関係）から100（極めて重要）**の間の整数でスコアリングしてください。"
-        "2. **動向予測**: 記事の内容が日本や世界に与える短期・長期的な影響、または次に注目すべき政治的ポイントを**100文字以内**で簡潔に分析し、コメントとして提供してください。"
-        "スコアが70未満の場合は動向予測は不要です。出力はJSON形式のみとし、余分な説明やマークダウンは付けないでください。"
-    )
+    prompt_template = """
+    あなたは日本の政治動向を分析する専門家です。提供されたニュース記事に対し、以下の2つの指示に従い、正確にJSON形式で出力してください。
+    1. **政治関連度判定**: 記事の内容が日本の政治にどれだけ重要か、**0（全く無関係）から100（極めて重要）**の間の整数でスコアリングしてください。
+    2. **動向予測**: 記事の内容が日本や世界に与える短期・長期的な影響、または次に注目すべき政治的ポイントを**100文字以内**で簡潔に分析し、コメントとして提供してください。
+    スコアが70未満の場合は動向予測は空文字列にしてください。出力はJSON形式のみとし、余分な説明やマークダウンは付けないでください。
+
+    例：{{"score": 85, "comment": "〇〇法案の可決により、次期選挙での与党の戦略が大きく変わる可能性がある。"}}
+    """
 
     for entry in entries:
         title = entry.get('title', '不明')
         description = entry.get('summary', '概要なし')
         
-        user_prompt = f"ニュースタイトル: {title}\nニュース概要: {description}"
+        user_prompt = f"{prompt_template}\n\n【分析対象ニュース】\nタイトル: {title}\nニュース概要: {description}"
         
         try:
-            response = model.generate_content(
-                user_prompt,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    response_mime_type="application/json"
+            # 互換性がある場合 (GenerateContentConfig が使える場合)
+            if GEMINI_CONFIG_AVAILABLE:
+                response = model.generate_content(
+                    user_prompt,
+                    config=GenerateContentConfig(
+                        system_instruction="あなたは優秀なJSON生成エキスパートです。",
+                        response_mime_type="application/json"
+                    )
                 )
-            )
+            # 互換性がない場合 (古いSDKの場合、configなしで実行)
+            else:
+                response = model.generate_content(user_prompt)
             
-            # JSONレスポンスのパース
-            ai_data = json.loads(response.text)
+            # JSONレスポンスのパース (レスポンスがJSON形式であることを期待)
+            response_text = response.text.strip()
+            # 応急処置として、```json ... ``` のマークダウンを除去
+            if response_text.startswith('```json'):
+                response_text = response_text.strip('` \n').replace('json', '', 1).strip()
+            
+            # JSONデコードを試みる
+            ai_data = json.loads(response_text)
             score = ai_data.get('score', 0)
             ai_comment = ai_data.get('comment', '')
             
@@ -160,11 +183,11 @@ def score_and_filter_with_ai(entries):
             entry['ai_comment'] = ai_comment
             
         except Exception as e:
-            print(f"  ⚠️ Gemini APIエラー発生: {e}")
-            entry['score'] = 0 # エラー時はスコアを0として除外
-            entry['ai_comment'] = ''
+            # エラー時にログを出力
+            print(f"  ⚠️ Gemini APIエラー発生（スコアリング）: {e}")
+            entry['score'] = 0 
+            entry['ai_comment'] = 'AIコメント生成に失敗しました。'
         
-        # スコアリング後にフィルタリングは行わず、スコアを付与して返す
         scored_news.append(entry)
         
         time.sleep(1) # API制限対策
@@ -176,9 +199,7 @@ def generate_ai_comment(title, description):
     if not GEMINI_API_KEY:
         return ""
     
-    # score_and_filter_with_aiで既にコメントを取得済みだが、
-    # 互換性のため残す場合は、この関数を修正するか、main関数で直接news['ai_comment']を使う
-    # 今回はmain関数でnews['ai_comment']を直接使うため、この関数は事実上未使用で良い
+    # score_and_filter_with_aiで既にコメントを取得済み
     return ""
 
 
@@ -292,9 +313,7 @@ def append_to_drive_log(drive, news_list, drive_folder_name, log_file_name):
         log_file = find_or_create_file(drive, drive_folder_name, log_file_name)
         
         # 現在の内容をダウンロード
-        # Google Drive上のファイルの内容が空でないことを確認してからダウンロード
         current_content = ""
-        # サービスアカウント認証直後は GetContentString が失敗することがあるため、例外処理を強化
         try:
              current_content = log_file.GetContentString(encoding='utf-8')
         except Exception:
@@ -324,7 +343,6 @@ def append_to_drive_log(drive, news_list, drive_folder_name, log_file_name):
             append_content += "-" * 80 + "\n"
             
         # 追記してアップロード
-        # 既存の内容 + 新しい内容 をセット
         log_file.SetContentString(current_content + append_content)
         log_file.Upload()
         
@@ -378,6 +396,7 @@ def main():
 
     # Gemini判定
     print("\n🤖 Geminiによるスコアリングと動向予測:")
+    # ここでエラーが発生していた
     scored_news = score_and_filter_with_ai(keyword_filtered_news)
     
     # スコアで最終フィルタリング
