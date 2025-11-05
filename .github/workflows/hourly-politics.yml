@@ -6,7 +6,7 @@ on:
     - cron: '0 0-13 * * *'   # UTC 0:00-13:00 = JST 9:00-22:00
   workflow_dispatch:
 
-# Gitへの書き込み権限 (履歴ファイル保存用)
+# Gitへの書き込み権限
 permissions:
   contents: write
 
@@ -26,10 +26,8 @@ jobs:
     - name: 依存パッケージインストール
       run: |
         pip install --upgrade pip
-        # 既存の google-generativeai をアンインストールし、確実に最新版をインストール
-        pip uninstall -y google-generativeai || echo "google-generativeai not installed, skipping uninstall."
-        # pipのキャッシュを無視し、強制的に再インストール
-        pip install --no-cache-dir --force-reinstall -r requirements.txt 
+        pip uninstall -y openai
+        pip install --no-cache-dir --force-reinstall -r requirements.txt
     
     - name: 履歴ファイルを復元
       continue-on-error: true
@@ -42,17 +40,10 @@ jobs:
           echo "{}" > posted_news_history.json
         fi
         
-    - name: 政治ニュース取得・フィルタ・投稿 (Drive連携を有効化)
+    - name: 政治ニュース取得・フィルタ・投稿
       env:
         DISCORD_WEBHOOK_POLITICS: ${{ secrets.DISCORD_WEBHOOK_POLITICS }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        
-        # ▼ Google Drive 連携用の環境変数 ▼
-        GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}
-        DRIVE_FOLDER_NAME: GitHub Political News Logs
-        LOG_FILE_NAME: political_news_summary.txt
-        # ▲ Google Drive 連携用の環境変数 ▲
-        
         POLITICAL_SCORE_THRESHOLD: 70
         MAX_NEWS_TO_POST: 5
       run: |
