@@ -311,7 +311,8 @@ def main():
         else:
             print(f"  ❌ [{score}点] {entry['title']}")
         
-        time.sleep(0.5)
+        # 429エラー回避のため、API呼び出しの待機時間を延長
+        time.sleep(3)
     
     print(f"\n✅ 最終結果: {len(political_news)}件")
     
@@ -333,7 +334,8 @@ def main():
         else:
             print(f"  ⚠️ AIコメント生成失敗")
         
-        time.sleep(1)  # API制限対策
+        # 429エラー回避のため、API呼び出しの待機時間を延長
+        time.sleep(3)  # API制限対策
         
         # メッセージ作成（AIコメント付き）
         message = create_discord_message(news, ai_comment)
