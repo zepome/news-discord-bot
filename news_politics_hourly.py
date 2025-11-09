@@ -19,7 +19,7 @@ import google.generativeai as genai
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_POLITICS')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 POLITICAL_SCORE_THRESHOLD = int(os.environ.get('POLITICAL_SCORE_THRESHOLD', '70'))
-MAX_NEWS_TO_POST = int(os.environ.get('MAX_NEWS_TO_POST', '3'))
+MAX_NEWS_TO_POST = int(os.environ.get('MAX_NEWS_TO_POST', '5'))
 
 # 投稿履歴ファイルのパス
 HISTORY_FILE = 'posted_news_history.json'
