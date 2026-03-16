@@ -28,7 +28,7 @@ HISTORY_RETENTION_HOURS = 24  # 24時間以内の重複をチェック
 # Gemini API設定
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    model = genai.GenerativeModel('gemini-3-flash-preview')
 
 # 政治関連キーワード
 POLITICAL_KEYWORDS = [
@@ -38,6 +38,7 @@ POLITICAL_KEYWORDS = [
     '増税', '減税', '防衛費', '社会保障', '財源', '憲法改正',
     '国会', '予算委員会', '党首討論', '選挙', '内閣改造', '政治資金',
     '日米', '日中', '日韓', 'トランプ', 'プーチン', '習近平'
+    'レアアース', '石油', '原油', '戦争', 'イラン', 'エプスタイン'
 ]
 
 # 除外キーワード
