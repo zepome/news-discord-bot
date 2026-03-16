@@ -2,8 +2,12 @@ name: Hourly Political News
 
 on:
   schedule:
-    - cron: '0 21-23 * * *'  # UTC 21:00-23:00 = JST 6:00-8:00
-    - cron: '0 0-13 * * *'   # UTC 0:00-13:00 = JST 9:00-22:00
+    # 毎日 6:00 JST (UTC 21:00)
+    - cron: '0 21 * * *'
+    # 毎日 13:00 JST (UTC 4:00)
+    - cron: '0 4 * * *'
+    # 毎日 21:00 JST (UTC 12:00)
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 # Gitへの書き込み権限
@@ -45,7 +49,7 @@ jobs:
         DISCORD_WEBHOOK_POLITICS: ${{ secrets.DISCORD_WEBHOOK_POLITICS }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         POLITICAL_SCORE_THRESHOLD: 70
-        MAX_NEWS_TO_POST: 5
+        MAX_NEWS_TO_POST: 10
       run: |
         python news_politics_hourly.py
     
