@@ -19,7 +19,7 @@ import google.generativeai as genai
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_POLITICS')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 POLITICAL_SCORE_THRESHOLD = int(os.environ.get('POLITICAL_SCORE_THRESHOLD', '70'))
-MAX_NEWS_TO_POST = int(os.environ.get('MAX_NEWS_TO_POST', '5'))
+MAX_NEWS_TO_POST = int(os.environ.get('MAX_NEWS_TO_POST', '10'))
 
 # 投稿履歴ファイルのパス
 HISTORY_FILE = 'posted_news_history.json'
@@ -37,7 +37,8 @@ POLITICAL_KEYWORDS = [
     '首相', '総理', '大臣', '官房長官', '財務大臣', '外相', '防衛相',
     '増税', '減税', '防衛費', '社会保障', '財源', '憲法改正',
     '国会', '予算委員会', '党首討論', '選挙', '内閣改造', '政治資金',
-    '日米', '日中', '日韓', 'トランプ', 'プーチン', '習近平'
+    '日米', '日中', '日韓', 'トランプ', 'プーチン', '習近平',
+    # 追加した時事・国際情勢ワード
     'レアアース', '石油', '原油', '戦争', 'イラン', 'エプスタイン'
 ]
 
@@ -58,11 +59,9 @@ def generate_news_hash(title, link):
     """
     ニュースの一意な識別子を生成（タイトル + URLのハッシュ値）
     """
-    # タイトルを正規化（空白を統一、記号を削除）
     normalized_title = re.sub(r'\s+', ' ', title.strip())
     normalized_title = re.sub(r'[【】『』「」\[\]()（）]', '', normalized_title)
     
-    # URLとタイトルを組み合わせてハッシュ化
     content = f"{normalized_title}|{link}"
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
@@ -77,7 +76,6 @@ def load_posted_history():
         with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
             history = json.load(f)
         
-        # 古い履歴を削除（24時間以上前）
         cutoff_time = datetime.now() - timedelta(hours=HISTORY_RETENTION_HOURS)
         cutoff_timestamp = cutoff_time.timestamp()
         
@@ -87,7 +85,6 @@ def load_posted_history():
             if timestamp > cutoff_timestamp
         }
         
-        # クリーンアップした履歴を保存
         if len(cleaned_history) < len(history):
             save_posted_history(cleaned_history)
             print(f"📝 履歴クリーンアップ: {len(history)} → {len(cleaned_history)}件")
@@ -129,7 +126,7 @@ def check_political_relevance(title, description):
     
     try:
         prompt = f"""
-以下のニュースが日本の政治にどれだけ関連しているか、0〜100点で評価してください。
+以下のニュースが日本の政治や国際情勢にどれだけ関連しているか、0〜100点で評価してください。
 数字のみで回答してください。
 
 タイトル: {title}
@@ -154,7 +151,7 @@ def generate_ai_comment(title, description):
     
     try:
         prompt = f"""
-以下の政治ニュースを分析し、この出来事が今後の日本や世界にどのような影響を及ぼすか予測してください。
+以下のニュースを分析し、この出来事が今後の日本や世界にどのような影響を及ぼすか予測してください。
 
 【ニュース】
 タイトル: {title}
@@ -175,7 +172,6 @@ def generate_ai_comment(title, description):
         response = model.generate_content(prompt)
         ai_comment = response.text.strip()
         
-        # コメントが取得できたか確認
         if ai_comment and len(ai_comment) > 20:
             return ai_comment
         else:
@@ -196,7 +192,6 @@ def create_discord_message(news_item, ai_comment=None):
     source = news_item.get('source', '不明')
     score = news_item.get('score', 0)
     
-    # スコアに応じた星評価
     if score >= 90:
         stars = '⭐⭐⭐⭐⭐'
     elif score >= 80:
@@ -208,20 +203,17 @@ def create_discord_message(news_item, ai_comment=None):
     else:
         stars = '⭐'
     
-    # 現在時刻（日本時間）
     jst = timezone(timedelta(hours=9))
     now = datetime.now(jst)
     time_str = now.strftime('%H:%M')
     
-    # メッセージ作成
-    content = f"🏛️ **【政治】{title}**\n"
+    content = f"🏛️ **【政治・時事】{title}**\n"
     content += f"━━━━━━━━━━━━━━━━━━\n"
     content += f"📰 **出典**: {source}\n"
     content += f"🎯 **関連度**: {score}点 {stars}\n"
     content += f"⏰ **取得時刻**: {time_str}\n"
     content += f"🔗 {link}\n"
     
-    # AIコメントがある場合
     if ai_comment:
         content += "\n" + "━━━━━━━━━━━━━━━━━━\n"
         content += "🤖 **AIによる動向予測**\n\n"
@@ -244,11 +236,9 @@ def main():
         print("❌ GEMINI_API_KEY が設定されていません")
         sys.exit(1)
     
-    # 投稿履歴の読み込み
     posted_history = load_posted_history()
     print(f"📚 投稿履歴: {len(posted_history)}件\n")
     
-    # ニュース取得
     all_entries = []
     for source_name, feed_url in NEWS_FEEDS.items():
         print(f"📡 {source_name} から取得中...")
@@ -278,7 +268,6 @@ def main():
     
     print(f"\n合計: {len(all_entries)}件のニュースを取得")
     
-    # 重複チェック
     new_entries = []
     duplicate_count = 0
     for entry in all_entries:
@@ -290,7 +279,6 @@ def main():
     
     print(f"🔍 重複チェック: {duplicate_count}件スキップ, {len(new_entries)}件が新規")
     
-    # キーワードフィルタリング
     keyword_matched = []
     for entry in new_entries:
         combined = f"{entry['title']} {entry['description']}"
@@ -300,9 +288,9 @@ def main():
     
     print(f"✅ キーワードマッチ: {len(keyword_matched)}件")
     
-    # Gemini判定
     political_news = []
-    for entry in keyword_matched[:10]:  # 最大10件チェック
+    # 候補を10件から20件に拡張
+    for entry in keyword_matched[:20]:
         score = check_political_relevance(entry['title'], entry['description'])
         entry['score'] = score
         
@@ -312,12 +300,10 @@ def main():
         else:
             print(f"  ❌ [{score}点] {entry['title']}")
         
-        # 429エラー回避のため、API呼び出しの待機時間を延長
         time.sleep(3)
     
     print(f"\n✅ 最終結果: {len(political_news)}件")
     
-    # Discord投稿
     if not political_news:
         print("\n📭 投稿するニュースがありません")
         return
@@ -327,7 +313,6 @@ def main():
         print(f"\n━━━━━━━━━━━━━━━━━━")
         print(f"処理中: {news['title']}")
         
-        # AIコメント生成
         ai_comment = generate_ai_comment(news['title'], news['description'])
         
         if ai_comment:
@@ -335,16 +320,13 @@ def main():
         else:
             print(f"  ⚠️ AIコメント生成失敗")
         
-        # 429エラー回避のため、API呼び出しの待機時間を延長
-        time.sleep(3)  # API制限対策
+        time.sleep(3)
         
-        # メッセージ作成（AIコメント付き）
         message = create_discord_message(news, ai_comment)
         
         try:
             requests.post(DISCORD_WEBHOOK_URL, json=message, timeout=10)
             
-            # 投稿成功したら履歴に追加
             mark_as_posted(news['title'], news['link'], posted_history)
             posted += 1
             print(f"  ✅ Discord投稿成功")
@@ -352,7 +334,6 @@ def main():
         except Exception as e:
             print(f"  ❌ 投稿エラー: {e}")
     
-    # 履歴を保存
     save_posted_history(posted_history)
     
     print(f"\n━━━━━━━━━━━━━━━━━━")
