@@ -67,6 +67,7 @@ jobs:
             echo "✅ 履歴に変更なし"
           else
             git commit -m "Update news history [skip ci]"
+            git pull --rebase origin main
             git push
             echo "✅ 履歴ファイルを保存しました"
           fi
